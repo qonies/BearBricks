@@ -1,0 +1,33 @@
+{
+  "name": "bearbricks",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @bearbricks/client",
+    "dev:server": "npm run dev --workspace @bearbricks/server",
+    "build": "npm run build --workspace @bearbricks/client && npm run build --workspace @bearbricks/server",
+    "start": "npm run start --workspace @bearbricks/server",
+    "test": "npm run test --workspace @bearbricks/shared && npm run test --workspace @bearbricks/client && npm run test --workspace @bearbricks/server",
+    "test:coverage": "npm run test:coverage --workspace @bearbricks/shared",
+    "typecheck": "npm run typecheck --workspace @bearbricks/shared && npm run typecheck --workspace @bearbricks/client && npm run typecheck --workspace @bearbricks/server",
+    "lint": "eslint packages",
+    "format": "prettier --write \"packages/**/src/**/*.{ts,tsx}\" \"packages/**/tests/**/*.ts\" \"*.{json,md}\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
