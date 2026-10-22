@@ -55,4 +55,4 @@
 - 心跳语义：15s 一个 ping，"连续 2 个 ping 无 pong" → 断开时刻 ≈ 最后一次 pong 后 30s（发 ping 后立即判 `pingId - lastPongId >= 2`）
 - 垃圾行与 active：`insertGarbage`（board 层）只移动棋盘格；active 随动上移与顶出校验必须走 `TetrisGame.receiveGarbage`，否则方块会被埋进垃圾行
 - survival 的两个"存活"口径必须分开：结束判定/HUD 用 `survivalAliveSeats`（含宽限内离线者），攻击目标用 `aliveSeats`（再排除离线，FR-10.2 不收发攻击）
-- `progress.md` 早前记录「git 仓库已建」与实际不符：仓库根从未 `git init`（2026-10-22 实测 `.git` 不存在）；`allowScripts` 不是 npm 官方字段（pnpm 语义），npm 11 会忽略
+- `git init` + 推送 GitHub 已于 2026-10-22 完成（qonies/bearbricks 私有仓库；gh 凭据助手配在 repo 级，因 cygwin git HOME 无效不能用全局配置）；`allowScripts` 不是 npm 官方字段（pnpm 语义），npm 11 会忽略
