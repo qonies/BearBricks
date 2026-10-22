@@ -68,5 +68,5 @@ timed（M4 复活）→ AI + 聊天完善（M5：聊天 UI 已落地，剩余真
 - Dockerfile 未经实际 build 验证（本机无 Docker）；`npm ci` 在仓库中尚未跑过（本轮验证需先安装依赖）
 - PowerShell 5.1 文本替换必须用 `[System.IO.File]::ReadAllText/WriteAllText`（UTF-8 无 BOM）；`Get-Content | Set-Content -Encoding UTF8` 会把中文按 ANSI 误读（历史踩坑）
 - PowerShell 5.1 会话 `$env:PORT` 会跨命令残留，烟测前记得 `Remove-Item Env:PORT`
-- 已推送 GitHub：github.com/qonies/bearbricks（私有，main = origin/main，首提交 4c98c04）；后续改动直接 `git commit` + `git push`（注意 PS 5.1 对 git 中文参数用 `-F 消息文件` 传递）
+- 已推送 GitHub：**github.com/qonies/BearBricks**（Public + MIT LICENSE，main = origin/main）；README 已含徽章/特性/模式表/协议说明；后续改动直接 `git commit` + `git push`（注意 PS 5.1 对 git 中文参数用 `-F 消息文件` 传递）
 

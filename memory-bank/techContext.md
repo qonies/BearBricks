@@ -2,7 +2,7 @@
 
 ## 当前环境（2026-10-22 全量代码审查后实测）
 - OS: Windows 11（win32），Shell: **PowerShell 5.1**（注意 UTF-8 编码与 PS 语法差异，避免 bash 语法）
-- Node: **v24.13.0**，npm: **11.12.1**（此前记录的 Node 22/npm 12 已过期）；git 2.34.1（cygwin git，HOME=/home/tony 不存在 → **勿用 `--global` 配置/`gh auth setup-git`**，一律 `--local`）；仓库已于 2026-10-22 `git init` 并推送 **github.com/qonies/bearbricks**（私有，main 分支，凭据助手 = 本地 `credential.helper=!gh auth git-credential`）
+- Node: **v24.13.0**，npm: **11.12.1**（此前记录的 Node 22/npm 12 已过期）；git 2.34.1（cygwin git，HOME=/home/tony 不存在 → **勿用 `--global` 配置/`gh auth setup-git`**，一律 `--local`）；仓库 **github.com/qonies/BearBricks**（**Public**，MIT 协议，main 分支，remote = 规范大小写 URL）；项目名/仓库名统一 **BearBricks**（gh rename 后旧 URL 自动重定向）
 - 工作目录：BearBricks 仓库根目录（路径含个人用户名，故不记录；以仓库根为基准执行全部命令）
 
 ## 规划技术栈（详见 docs/technical-design.md 与 ADR-0001）
