@@ -8,6 +8,7 @@ import {
   SELF_SNAPSHOT_SCHEMA,
   SprintStrategy,
   SurvivalStrategy,
+  TimedStrategy,
   TOTAL_HEIGHT,
   TetrisGame,
   buildOtherSeatSnapshot,
@@ -35,7 +36,7 @@ describe('survival 策略攻击（TC-MD-B-001 / §4.3 攻击表）', () => {
     expect(s.onLinesCleared({ lines: 2, tspin: 'none', combo: 99, b2b: false, perfectClear: false })).toEqual({ lines: 6 });
   });
 
-  it('顶出 → ELIMINATE；sprint 策略无攻击、顶出 RESET_BOARD；timed 工厂拒绝（M4）', () => {
+  it('timed 策略：顶出 RESPAWN、工厂注册（M4）；sprint 策略无攻击、顶出 RESET_BOARD', () => {
     expect(s.onTopOut()).toBe('ELIMINATE');
     expect(s.engineMode()).toBe('marathon');
     const sp = new SprintStrategy();
@@ -43,7 +44,7 @@ describe('survival 策略攻击（TC-MD-B-001 / §4.3 攻击表）', () => {
     expect(sp.onTopOut()).toBe('RESET_BOARD');
     expect(sp.engineMode()).toBe('sprint');
     expect(createModeStrategy('survival')).toBeInstanceOf(SurvivalStrategy);
-    expect(() => createModeStrategy('timed')).toThrow();
+    expect(createModeStrategy('timed')).toBeInstanceOf(TimedStrategy);
   });
 });
 

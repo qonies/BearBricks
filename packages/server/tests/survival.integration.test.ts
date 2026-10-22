@@ -144,10 +144,12 @@ describe('M3 survival 对战（真实 ws）', () => {
     await b.next('room.state');
     b.send('game.ready', { ready: true });
 
-    // timed 仍拒绝（M4）
+    // timed 已开放（M4）：接受并默认 timeLimit=180；随即切回 survival
     a.send('room.updateSettings', { mode: 'timed' });
-    const err = await a.next('error');
-    expect(err.d.code).toBe('E4031');
+    await a.nextWhere<{ room: { settings: { mode: string } } }>(
+      'room.state',
+      (d) => d.room.settings.mode === 'timed',
+    );
 
     // 切 survival（房主权限）
     a.send('room.updateSettings', { mode: 'survival' });

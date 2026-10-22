@@ -29,6 +29,10 @@ export class NetGameRunner {
   private lastTs = 0;
   private rafId = 0;
   private running = false;
+  /** timed：复活倒计时冻结截止（epoch ms）；期间不推进引擎、不上行输入 */
+  private freezeUntilMs: number | null = null;
+  /** timed：当前生效的复活事件（respawnAt），用于识别新一次顶出复活 */
+  private activeRespawnAt: number | null = null;
 
   constructor(
     seed: string,
@@ -51,6 +55,34 @@ export class NetGameRunner {
     );
   }
 
+  /** timed 复活同步（M4）：快照 modeState.timed 驱动 —— respawnAt 出现 = 新一次顶出复活
+   *  （本地引擎同步 respawn 并冻结输入至 respawnAt）；respawnAt 消失 = 倒计时结束恢复对局 */
+  syncTimed(t: { respawnAt?: number } | null): void {
+    const respawnAt = t?.respawnAt ?? null;
+    if (respawnAt != null) {
+      if (this.activeRespawnAt == null) {
+        // 复活等待期服务端静默丢弃输入：清空未确认日志，避免重放陈旧输入污染新棋盘
+        this.inputLog.clear();
+        this.game.respawn();
+      }
+      this.activeRespawnAt = respawnAt;
+      this.freezeUntilMs = respawnAt;
+    } else if (this.activeRespawnAt != null) {
+      this.activeRespawnAt = null;
+      this.freezeUntilMs = null;
+    }
+  }
+
+  /** timed 冻结判定：倒计时截止前不推进引擎（与服务器冻结窗口对齐） */
+  private frozen(): boolean {
+    if (this.freezeUntilMs == null) return false;
+    if (Date.now() >= this.freezeUntilMs) {
+      this.freezeUntilMs = null;
+      return false;
+    }
+    return true;
+  }
+
   setTiming(das: number, arr: number): void {
     this.scheduler.setTiming(das, arr);
   }
@@ -66,7 +98,7 @@ export class NetGameRunner {
     const loop = (ts: number): void => {
       const dt = Math.max(0, Math.min(ts - this.lastTs, 250));
       this.lastTs = ts;
-      if (!this.paused) {
+      if (!this.paused && !this.frozen()) {
         this.scheduler.update(dt);
         this.acc += dt;
         while (this.acc >= STEP_MS) {
@@ -86,9 +118,9 @@ export class NetGameRunner {
     this.running = false;
   }
 
-  /** 本地应用 + 记录 seq + 上行回调；终局/暂停后不再产生输入（防 E4031 轰炸） */
+  /** 本地应用 + 记录 seq + 上行回调；终局/暂停/复活冻结期间不再产生输入（防 E4031 轰炸） */
   private dispatch(action: GameAction): boolean {
-    if (this.paused || this.game.status !== 'running') return false;
+    if (this.paused || this.frozen() || this.game.status !== 'running') return false;
     const seq = ++this.seqCounter;
     const ok = this.game.applyInput(action);
     this.inputLog.set(seq, action);

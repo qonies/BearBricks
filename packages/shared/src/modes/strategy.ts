@@ -48,9 +48,24 @@ export class SurvivalStrategy implements GameModeStrategy {
   }
 }
 
-/** 工厂：timed 策略 M4 落地（Room.updateSettings 已拒绝 timed） */
+export class TimedStrategy implements GameModeStrategy {
+  readonly id = 'timed' as const;
+  onLinesCleared(clear: AttackInput): AttackPlan {
+    // timed 与 survival 同用全量攻击表（requirements §4.4 §C）
+    return { lines: calcAttack(clear) };
+  }
+  onTopOut(): TopOutAction {
+    return 'RESPAWN'; // 复活倒计时/免伤窗计时由 Room 层处置（策略只定动作）
+  }
+  engineMode(): GameMode {
+    return 'marathon'; // 顶出即终局，由 Room 复活（respawn）后继续
+  }
+}
+
+/** 工厂：按模式 id 构建策略实例 */
 export function createModeStrategy(id: 'sprint' | 'survival' | 'timed'): GameModeStrategy {
   if (id === 'survival') return new SurvivalStrategy();
   if (id === 'sprint') return new SprintStrategy();
-  throw new Error('timed 模式将在 M4 实现');
+  if (id === 'timed') return new TimedStrategy();
+  throw new Error(`未知模式: ${id}`);
 }

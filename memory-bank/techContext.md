@@ -21,10 +21,10 @@
 ## 目录结构（M3 + 全量审查修复后实际状态，2026-10-22）
 ```
 packages/
-  shared/    纯 TS 引擎 + 规则 + 协议（engine/*、rules/*、modes/{strategy,sprint,survival}.ts、protocol/{messages,snapshot}.ts）+ tests/（Vitest 68 用例）
+  shared/    纯 TS 引擎 + 规则 + 协议（engine/*、rules/*、modes/{strategy,sprint,survival,timed}.ts、protocol/{messages,snapshot}.ts）+ tests/（Vitest 77 用例）
   client/    React19+Vite6+Tailwind4+Zustand（net/{netClient,identity}、game/*、components/{Lobby,RoomView,GameView,GameViewMP,ChatPanel}、i18n.ts）+ tests/（13 用例）
-  server/    Fastify+ws（net/{wsHub,session}、room/{roomManager,room}、app/index/config）+ tests/（真实 ws 集成 8 用例）
-docs/        需求/技术/协议(v1.3)/测试/ADR
+  server/    Fastify+ws（net/{wsHub,session}、room/{roomManager,room}、app/index/config）+ tests/（真实 ws 集成 10 用例，vitest fileParallelism=false）
+docs/        需求/技术/协议(v1.4)/测试/ADR
 memory-bank/ 本记忆库
 ```
 

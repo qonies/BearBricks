@@ -25,6 +25,18 @@ function formatTime(ms: number): string {
   return `${String(Math.floor(total / 6000)).padStart(2, '0')}:${String(Math.floor(total / 100) % 60).padStart(2, '0')}.${String(total % 100).padStart(2, '0')}`;
 }
 
+/** 倒计时用 mm:ss（向上取整，0 显示 00:00） */
+function formatClock(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+interface TimedHudState {
+  endsAt: number;
+  respawnAt?: number;
+  immuneUntil?: number;
+}
+
 export function GameViewMP({ onExit }: { onExit: () => void }) {
   const mpStart = useRoomStore((s) => s.mpStart);
   const room = useRoomStore((s) => s.room);
@@ -33,8 +45,18 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const holdRef = useRef<HTMLCanvasElement | null>(null);
   const nextRef = useRef<HTMLCanvasElement | null>(null);
-  const [hud, setHud] = useState({ lines: 0, level: 1, elapsedMs: 0, selfAlive: true });
+  const [hud, setHud] = useState({
+    lines: 0,
+    level: 1,
+    score: 0,
+    elapsedMs: 0,
+    selfAlive: true,
+    timeLeftMs: 0,
+    respawnLeftMs: 0,
+    immuneLeftMs: 0,
+  });
   const [survival, setSurvival] = useState({ aliveCount: 0, pending: 0 });
+  const timedRef = useRef<TimedHudState | null>(null);
   const [attackFlash, setAttackFlash] = useState<{ from: string; lines: number } | null>(null);
 
   // 收到指向自己的攻击 → 短暂闪烁提示（game.attack，protocol §4）
@@ -75,6 +97,11 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
           pending: snap.modeState.survival.pendingGarbage,
         });
       }
+      // timed（M4）：modeState.timed 驱动 HUD（剩余时间/复活倒计时/免伤）与本地复活同步
+      if (snap.modeState.timed) {
+        timedRef.current = snap.modeState.timed;
+        runner.syncTimed(snap.modeState.timed);
+      }
     });
 
     // 聊天（FR-9）：用户消息 + 系统消息（i18n key 渲染）
@@ -114,16 +141,21 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
       if (holdCtx) drawMini(holdCtx, [g.hold], 18);
       const nextCtx = nextRef.current?.getContext('2d');
       if (nextCtx) drawMini(nextCtx, g.queue.slice(0, 5), 18);
-      const sig = `${g.lines}|${g.level}|${g.status}`;
+      const sig = `${g.lines}|${g.level}|${g.score}|${g.status}`;
       const now = performance.now();
       if (sig !== lastSig || now - lastHudPush > 100) {
         lastSig = sig;
         lastHudPush = now;
+        const t = timedRef.current;
         setHud({
           lines: g.lines,
           level: g.level,
+          score: g.score,
           elapsedMs: g.elapsedMs,
           selfAlive: g.status === 'running',
+          timeLeftMs: t ? Math.max(0, t.endsAt - Date.now()) : 0,
+          respawnLeftMs: t?.respawnAt != null ? Math.max(0, t.respawnAt - Date.now()) : 0,
+          immuneLeftMs: t?.immuneUntil != null ? Math.max(0, t.immuneUntil - Date.now()) : 0,
         });
       }
     };
@@ -201,6 +233,7 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
   if (!mpStart) return null;
   const isHost = room != null && selfSeatId != null && room.hostSeat === selfSeatId;
   const isSurvival = mpStart.mode === 'survival';
+  const isTimed = mpStart.mode === 'timed';
   const pendingRows = Math.min(survival.pending, 20);
   const selfEliminated = isSurvival && !hud.selfAlive;
 
@@ -209,9 +242,15 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
       <div className="flex flex-col items-center gap-3">
         <div className="flex w-[312px] items-baseline justify-between">
           <span className="text-lg font-bold">
-            {isSurvival ? `生存淘汰 · 存活 ${survival.aliveCount}` : `Sprint ${mpStart.targetLines}`}
+            {isSurvival
+              ? `生存淘汰 · 存活 ${survival.aliveCount}`
+              : isTimed
+                ? '限时赛'
+                : `Sprint ${mpStart.targetLines}`}
           </span>
-          <span className="font-mono text-xl">{formatTime(hud.elapsedMs)}</span>
+          <span className={`font-mono text-xl ${isTimed && hud.timeLeftMs <= 10_000 ? 'text-rose-400' : ''}`}>
+            {isTimed ? formatClock(hud.timeLeftMs) : formatTime(hud.elapsedMs)}
+          </span>
         </div>
         <div className="flex items-stretch gap-2">
           <canvas
@@ -233,6 +272,16 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
         {selfEliminated && (
           <div className="rounded-lg bg-rose-900/60 px-4 py-1 text-sm font-semibold text-rose-300">
             你已被淘汰（观战中）
+          </div>
+        )}
+        {isTimed && hud.respawnLeftMs > 0 && (
+          <div className="rounded-lg bg-amber-700/80 px-4 py-1 text-sm font-semibold text-amber-100">
+            复活倒计时 {(hud.respawnLeftMs / 1000).toFixed(1)}s
+          </div>
+        )}
+        {isTimed && hud.respawnLeftMs <= 0 && hud.immuneLeftMs > 0 && (
+          <div className="rounded-lg bg-sky-800/80 px-4 py-1 text-sm font-semibold text-sky-100">
+            🛡 免伤中（{(hud.immuneLeftMs / 1000).toFixed(1)}s）
           </div>
         )}
         {attackFlash && (
@@ -270,6 +319,27 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
                 <span className={`font-mono ${survival.pending > 0 ? 'text-rose-400' : ''}`}>
                   {survival.pending}
                 </span>
+              </div>
+            </>
+          ) : isTimed ? (
+            <>
+              <div className="flex justify-between">
+                <span className="text-slate-400">剩余时间</span>
+                <span className={`font-mono ${hud.timeLeftMs <= 10_000 ? 'text-rose-400' : ''}`}>
+                  {formatClock(hud.timeLeftMs)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">得分</span>
+                <span className="font-mono">{hud.score}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">消行</span>
+                <span className="font-mono">{hud.lines}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">等级</span>
+                <span className="font-mono">{hud.level}</span>
               </div>
             </>
           ) : (
@@ -378,9 +448,13 @@ function ResultOverlay(props: { isHost: boolean; onExit: () => void }) {
                       : r.timeMs != null
                         ? `${formatTime(r.timeMs)} 淘汰`
                         : '存活'
-                    : r.timeMs != null
-                      ? formatTime(r.timeMs)
-                      : `${r.lines} 行`}
+                    : result.mode === 'timed'
+                      ? r.status === 'abandoned'
+                        ? '放弃'
+                        : `${(r.score ?? 0).toLocaleString()} 分 · ${r.lines} 行`
+                      : r.timeMs != null
+                        ? formatTime(r.timeMs)
+                        : `${r.lines} 行`}
                 </span>
               </div>
             ))}

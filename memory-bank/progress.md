@@ -8,7 +8,8 @@
 | M2 | sprint 竞速赛联机（4 人，网络层打通 + 乐观渲染校正） | ✅ 完成（2026-10-22） |
 | M2.5 | 安全加固（信封/原型链/maxPayload/XFF）+ 重连闭环 + 行为一致性修复 | ✅ 完成（2026-10-22） |
 | M3 | survival 生存淘汰（攻击/垃圾行/淘汰观战） | ✅ 完成（2026-10-22） |
-| M4 | timed 限时赛（计时同步/复活/免伤） | ⬜ 未开始 |
+| M3.5 | 全量代码审查修复（27 项）+ 协议 v1.3 + 聊天 UI | ✅ 完成（2026-10-22） |
+| M4 | timed 限时赛（计时同步/复活/免伤） | ✅ 完成（2026-10-22） |
 | M5 | AI 机器人（3 难度）+ 聊天 UI | ⬜ 未开始（server 端聊天协议已实现，UI 未做） |
 | M6 | 打磨：设置/音效/可访问性/压测/Docker 部署 | ⬜ 未开始 |
 
@@ -34,10 +35,14 @@
   - **服务端健壮性**：uncaughtException/unhandledRejection 以非零码退出（NFR-4）；dev Origin 放行私有网段（局域网联机主场景）；静态目录 path 前缀加固 + 指纹资源缓存头；`transferHost` 不再转让给 AI/无真人时保持空位；VICTORY 平局逐人播报；心跳计时修正（连续 2 个 ping 无 pong ≈30s 判断线）；删除死代码 `destroyRoom`；昵称去重后缀不超 12 字符
   - **文档同步**：README（M3 状态/v1.3/聊天/NAT 注意）、technical-design §2.1（M3 目录）§2.3（实际策略接口）、ADR-0005（接口修订记录）、techContext（环境实测 Node 24/npm 11、`.git` 未初始化、用例数）、test-plan（M3 集成测试）、过时注释（room/GameViewMP/garbage/board/srs）
   - **测试**：+2 shared（receiveGarbage 随动上移/no-op）+3 server（宽限不提前终局+resume 复位、FINISHED E4031、入站限流；TestClient 回应心跳）+1 client（i18n/chatLog，5 用例）；**shared 68 + client 13 + server 8**
+- [x] **M4 timed 限时赛（2026-10-22）**：
+  - shared：`modes/timed.ts`（computeTimedRanking：总分→消行→顶出次数，完全同值并列，abandoned 移出）+ `TimedStrategy`（攻击与 survival 同表 / onTopOut RESPAWN / marathon 语义）+ 引擎 `TetrisGame.respawn()`（清盘保分保消行、combo/b2b 清零、bag 延续）+ 常量（TIMED_IMMUNE_MS/TIMED_TIME_LIMITS/TIMED_DEFAULT_TIME_LIMIT）+ 协议 v1.4（modeState.timed{endsAt,respawnAt?,immuneUntil?}、game.start.timeLimit、updateSettings 放行 timed、RankingEntry.score）
+  - server：updateSettings 放行 timed（timeLimit 120/180/300 校验、默认 180）；markSeatGameEnded timed 分支（topOuts+1、respawnUntilTick=+180 tick、immuneUntilTick=+360、待收垃圾清空、game.respawn、广播 topOut/RESPAWN + chat.system RESPAWN）；tickStep 复活倒计时冻结 + immuneUntilTick 到期清理；attackTargets() 排除复活/免伤座位；insertDueGarbage 放行 timed；计时归零 finishGame('timeout')；宽限超时计顶出；finishGame timed 排名分支；selfModeState timed（epoch ms）+ 快照 key 增 timed 字段
+  - client：NetGameRunner.syncTimed（modeState.timed.respawnAt 驱动本地 respawn + 清 inputLog + 冻结输入）；GameViewMP timed HUD（剩余时间/复活倒计时/免伤横幅/得分）+ 结算屏分数显示；RoomView timed 选项 + 时长选择器
+  - 测试：shared `timed.test.ts` 9 用例 + server `timed.integration.test.ts` 2 用例（真实 ws 全流程：校验→攻击→顶出 RESPAWN→冻结→免伤→归零结算→rematch 无残留）+ survival 测试 timed 断言更新；server `vitest.config.ts` `fileParallelism: false`（tick 时序稳定）；**shared 77 + client 13 + server 10 全绿**；protocol.md 升 v1.4、README/test-plan 同步
 
 ## 未开始 / 已知事项
-- M4 timed（复用 strategy 抽象 + 攻击链路已就绪，需 respawn/免伤/modeState.timed）
-- 真实 AI（M5，M2 用临时 bot 占位：新块 0.5s 后硬降）与聊天 UI
+- 真实 AI（M5，M2 用临时 bot 占位：新块 0.5s 后硬降）与聊天 UI（聊天 UI 已于 M3.5 落地，剩 AI）
 - Playwright E2E（TC-UI-002~007）待装浏览器；带宽/200 房压测（M6）
 
 ## 经验教训 / 注意事项

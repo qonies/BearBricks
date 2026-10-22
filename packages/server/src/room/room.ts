@@ -5,12 +5,16 @@
 import { randomUUID, randomInt } from 'node:crypto';
 import {
   Rng,
+  RESPAWN_DELAY_MS,
   SPRINT_TIMEOUT_MS,
   TetrisGame,
+  TIMED_DEFAULT_TIME_LIMIT,
+  TIMED_IMMUNE_MS,
   buildOtherSeatSnapshot,
   buildSelfSnapshot,
   computeSprintRanking,
   computeSurvivalRanking,
+  computeTimedRanking,
   createModeStrategy,
   otherSeatHash,
   pickHoleColumn,
@@ -74,8 +78,12 @@ export interface Seat {
   /** survival：已淘汰（转观战） */
   eliminated: boolean;
   eliminatedAtMs: number | null;
-  /** 顶出次数（timed 排名用，M4；survival 记账） */
+  /** 顶出次数（timed 排名用；survival 记账） */
   topOuts: number;
+  /** timed：复活倒计时截止 tick（期间棋盘冻结/输入丢弃/不收发攻击）；null = 不在倒计时 */
+  respawnUntilTick: number | null;
+  /** timed：免伤截止 tick（复活后 3s 不收发攻击）；null = 无免伤 */
+  immuneUntilTick: number | null;
 }
 
 function emptySeat(seatId: number): Seat {
@@ -111,6 +119,8 @@ function emptySeat(seatId: number): Seat {
     eliminated: false,
     eliminatedAtMs: null,
     topOuts: 0,
+    respawnUntilTick: null,
+    immuneUntilTick: null,
   };
 }
 
@@ -138,7 +148,11 @@ export class Room {
   phase: 'WAITING' | 'COUNTDOWN' | 'PLAYING' | 'FINISHED' = 'WAITING';
   readonly seats: Seat[];
   hostSeat = 0;
-  settings: { mode: GameModeName; targetLines: 20 | 40 } = { mode: 'sprint', targetLines: 40 };
+  settings: { mode: GameModeName; targetLines: 20 | 40; timeLimit: number } = {
+    mode: 'sprint',
+    targetLines: 40,
+    timeLimit: TIMED_DEFAULT_TIME_LIMIT,
+  };
   tick = 0;
   lastActivity = Date.now();
 
@@ -167,6 +181,8 @@ export class Room {
       settings: {
         mode: this.settings.mode,
         targetLines: this.settings.mode === 'sprint' ? this.settings.targetLines : undefined,
+        timeLimit:
+          this.settings.mode === 'timed' ? (this.settings.timeLimit as 120 | 180 | 300) : undefined,
       },
       seats: this.seats.map((s): PublicSeat => {
         if (s.kind === 'empty') return { seatId: s.seatId, kind: 'empty' };
@@ -281,7 +297,9 @@ export class Room {
       if (now - seat.disconnectedAt <= GRACE_MS) continue;
       const disconnectedAt = seat.disconnectedAt;
       if (this.phase === 'PLAYING' && !seat.abandoned) {
-        // FR-10.3：sprint 宽限超时 → 移出排名；同时作废 resumeToken（不可再恢复该座位）
+        // FR-10.3：sprint 宽限超时 → 移出排名；timed → 计顶出后移出排名；
+        // 同时作废 resumeToken（不可再恢复该座位）
+        if (this.settings.mode === 'timed') seat.topOuts += 1;
         seat.abandoned = true;
         seat.session = null;
         seat.resumeToken = null;
@@ -377,9 +395,18 @@ export class Room {
     );
   }
 
-  /** 攻击目标口径（survival）：在 survivalAliveSeats 基础上再排除离线宽限者（FR-10.2：宽限期不收发攻击） */
+  /** 攻击目标口径（survival/timed）：在 survivalAliveSeats 基础上再排除离线宽限者（FR-10.2：宽限期不收发攻击） */
   private aliveSeats(): Seat[] {
     return this.survivalAliveSeats().filter((s) => !(s.kind === 'human' && !s.online));
+  }
+
+  /** 攻击目标最终口径（§4.3）：survival 用 aliveSeats；timed 再排除复活倒计时/免伤窗内的座位（§4.5） */
+  private attackTargets(): Seat[] {
+    const base = this.aliveSeats();
+    if (this.settings.mode !== 'timed') return base;
+    return base.filter(
+      (s) => s.respawnUntilTick == null && (s.immuneUntilTick == null || this.tick >= s.immuneUntilTick),
+    );
   }
 
   /** 当前模式下的己方快照 modeState（protocol §5） */
@@ -390,16 +417,33 @@ export class Room {
         survival: { aliveCount: this.survivalAliveSeats().length, pendingGarbage: seat.pendingGarbage },
       };
     }
+    if (this.settings.mode === 'timed') {
+      // 时刻统一换算为服务器 epoch ms（loopStart + tick 基准），客户端直接与本地时钟比较
+      const timed: NonNullable<SelfSnapshot['modeState']['timed']> = {
+        endsAt: this.loopStart + this.settings.timeLimit * 1000,
+      };
+      if (seat.respawnUntilTick != null)
+        timed.respawnAt = this.loopStart + seat.respawnUntilTick * STEP_MS;
+      if (seat.immuneUntilTick != null)
+        timed.immuneUntil = this.loopStart + seat.immuneUntilTick * STEP_MS;
+      return { timed };
+    }
     return { sprint: { target: this.settings.targetLines } };
   }
 
   // ===== 房主控制（仅 WAITING） =====
 
   updateSettings(session: Session, d: unknown): void {
-    const p = d as { mode: GameModeName; targetLines?: 20 | 40; timeLimit?: number };
+    const p = d as { mode: GameModeName; targetLines?: 20 | 40; timeLimit?: 120 | 180 | 300 };
     if (session.seatId !== this.hostSeat) return session.sendError('E4030', '仅房主可修改设置');
     if (this.phase !== 'WAITING') return session.sendError('E4031', '仅等待中可修改设置');
-    if (p.mode === 'timed') return session.sendError('E4031', '限时赛尚未开放（M4）');
+    // 防御性二次校验（schema 已限 120/180/300，此处兜底非 timed 模式携带 timeLimit）
+    if (p.timeLimit != null && p.mode !== 'timed')
+      return session.sendError('E4031', 'timeLimit 仅限时赛支持');
+    if (p.mode === 'timed') {
+      if (p.timeLimit != null) this.settings.timeLimit = p.timeLimit;
+      else if (this.settings.mode !== 'timed') this.settings.timeLimit = TIMED_DEFAULT_TIME_LIMIT;
+    }
     this.settings.mode = p.mode;
     this.strategy = createModeStrategy(p.mode);
     if (p.targetLines === 20 || p.targetLines === 40) this.settings.targetLines = p.targetLines;
@@ -484,6 +528,8 @@ export class Room {
       seat.eliminated = false;
       seat.eliminatedAtMs = null;
       seat.topOuts = 0;
+      seat.respawnUntilTick = null;
+      seat.immuneUntilTick = null;
       seat.lastBotPiece = null;
       seat.botPieceTicks = 0;
       seat.seenOthers.clear();
@@ -533,6 +579,8 @@ export class Room {
       seat.eliminated = false;
       seat.eliminatedAtMs = null;
       seat.topOuts = 0;
+      seat.respawnUntilTick = null;
+      seat.immuneUntilTick = null;
     }
     this.tick = 0;
     this.loopStart = Date.now();
@@ -540,6 +588,7 @@ export class Room {
     this.broadcast('game.start', {
       mode: this.settings.mode,
       targetLines: this.settings.targetLines,
+      timeLimit: this.settings.mode === 'timed' ? this.settings.timeLimit : undefined,
       seeds,
       startTs: this.loopStart,
     });
@@ -563,6 +612,13 @@ export class Room {
     for (const seat of this.seats) {
       if (seat.kind === 'empty' || !seat.game || seat.abandoned || seat.eliminated || seat.finished) continue;
       if (seat.kind === 'human' && !seat.online) continue; // 断线宽限期：棋盘冻结（FR-10.2），不推进重力/锁定、不收垃圾
+      // timed 免伤窗到期清理（attackTargets 已按 tick 判断生效，此处复位字段以同步快照 modeState）
+      if (seat.immuneUntilTick != null && this.tick >= seat.immuneUntilTick) seat.immuneUntilTick = null;
+      // timed 复活倒计时：棋盘已清但冻结（不推进重力/输入/垃圾），到点自动恢复对局（免伤窗另计）
+      if (seat.respawnUntilTick != null) {
+        if (this.tick >= seat.respawnUntilTick) seat.respawnUntilTick = null;
+        else continue;
+      }
       const game = seat.game;
       this.insertDueGarbage(seat, game); // 500ms 缓冲到期的垃圾行先插入，本 tick 输入在其上结算
       seat.pendingInputs.sort((a, b) => a.seq - b.seq);
@@ -585,8 +641,11 @@ export class Room {
         this.botTick(seat);
       }
     }
-    // sprint 专有 300s 超时（requirements §4.4）；survival 无超时（最后存活者胜），timed 由 M4 策略计时
+    // sprint 专有 300s 超时（requirements §4.4）；survival 无超时（最后存活者胜）；
+    // timed 计时归零结束（endsAt 以服务器 tick 为准，requirements §4.4 §C）
     if (this.settings.mode === 'sprint' && this.tick * STEP_MS >= SPRINT_TIMEOUT_MS)
+      return this.finishGame('timeout');
+    if (this.settings.mode === 'timed' && this.tick * STEP_MS >= this.settings.timeLimit * 1000)
       return this.finishGame('timeout');
     this.maybeFinish();
     if (this.phase !== 'PLAYING') return;
@@ -594,9 +653,9 @@ export class Room {
     if (this.tick % OTHERS_SNAPSHOT_EVERY === 0) this.sendOtherSnapshots();
   }
 
-  /** 到期垃圾行插入（survival）：单批 ≤8 行，同批同洞列；顶出方块被挤压时按模式处置 */
+  /** 到期垃圾行插入（survival/timed）：单批 ≤8 行，同批同洞列；顶出方块被挤压时按模式处置 */
   private insertDueGarbage(seat: Seat, game: TetrisGame): void {
-    if (this.settings.mode !== 'survival') return;
+    if (this.settings.mode === 'sprint') return; // sprint 攻击关闭，无垃圾行
     if (seat.garbageDueTick == null || this.tick < seat.garbageDueTick) return;
     const rows = Math.min(GARBAGE_BATCH_MAX, seat.pendingGarbage);
     if (rows <= 0) {
@@ -627,7 +686,7 @@ export class Room {
       from.garbageDueTick = null;
     }
     const forwarded = plan.lines - offset;
-    const targets = this.aliveSeats().filter((s) => s.seatId !== from.seatId);
+    const targets = this.attackTargets().filter((s) => s.seatId !== from.seatId);
     if (forwarded <= 0 || targets.length === 0) return;
     for (const t of targets) {
       t.pendingGarbage += forwarded;
@@ -641,10 +700,26 @@ export class Room {
     this.broadcast('game.attack', payload);
   }
 
-  /** 引擎对局结束的按模式处置：sprint 完赛 / survival 顶出淘汰（转观战） */
+  /** 引擎对局结束的按模式处置：sprint 完赛 / survival 顶出淘汰（转观战）/ timed 顶出复活 */
   private markSeatGameEnded(seat: Seat): void {
     const game = seat.game;
     if (!game) return;
+    if (this.settings.mode === 'timed') {
+      // timed（requirements §4.4 §C / §4.5）：3s 复活倒计时（棋盘冻结）→ 棋盘清空、
+      // 分数/消行保留、复活后 3s 免伤；待收垃圾随棋盘一并清空（免伤期内不接收攻击）
+      seat.topOuts += 1;
+      seat.respawnUntilTick = this.tick + RESPAWN_DELAY_MS / STEP_MS;
+      seat.immuneUntilTick = seat.respawnUntilTick + TIMED_IMMUNE_MS / STEP_MS;
+      seat.pendingGarbage = 0;
+      seat.garbageDueTick = null;
+      game.respawn();
+      this.broadcast('game.topOut', { seatId: seat.seatId, action: 'RESPAWN' });
+      this.broadcast('chat.system', {
+        code: 'RESPAWN',
+        params: { seatId: seat.seatId, nickname: seat.nickname ?? '' },
+      });
+      return;
+    }
     if (this.settings.mode !== 'survival') {
       seat.finished = true;
       seat.finishTimeMs = game.finishTimeMs;
@@ -683,7 +758,8 @@ export class Room {
     for (const seat of this.seats) {
       if (seat.kind !== 'human' || !seat.game || !seat.session || seat.abandoned) continue;
       const snap = buildSelfSnapshot(seat.game, this.tick, seat.lastSeq, this.selfModeState(seat));
-      const key = `${snap.seq}:${snap.h}:${snap.modeState.survival?.pendingGarbage ?? 0}`;
+      const timed = snap.modeState.timed;
+      const key = `${snap.seq}:${snap.h}:${snap.modeState.survival?.pendingGarbage ?? 0}:${timed?.respawnAt ?? 0}:${timed?.immuneUntil ?? 0}`;
       if (key === seat.lastSelfKey) continue;
       seat.lastSelfKey = key;
       this.sendToSeat(seat, 'game.snapshot.self', snap);
@@ -741,6 +817,7 @@ export class Room {
       return session.sendError('E4031', '当前不在对局中');
     }
     if (seat.abandoned || seat.finished || seat.eliminated) return; // 已放弃/已完赛/已淘汰：静默丢弃（客户端会在终局停止发送）
+    if (seat.respawnUntilTick != null) return; // timed 复活倒计时：输入静默丢弃（客户端冻结输入；重放日志由复活事件清空）
     if (p.seq <= seat.lastSeq) return; // 重复/过期输入静默丢弃
     const now = Date.now();
     seat.actionTimes = seat.actionTimes.filter((t) => now - t < 1000);
@@ -792,6 +869,26 @@ export class Room {
           | 'abandoned'
           | 'eliminated'
           | 'finished',
+      }));
+    } else if (this.settings.mode === 'timed') {
+      // timed 排名（requirements §4.4 §C）：总分 → 消行数 → 顶出次数；abandoned 移出排名（与 sprint 一致）
+      const ranked = occupied.filter((s) => !s.abandoned);
+      const ranks = computeTimedRanking(
+        ranked.map((s) => ({
+          seatId: s.seatId,
+          score: s.game?.score ?? 0,
+          lines: s.lines,
+          topOuts: s.topOuts,
+        })),
+      );
+      ranking = ranked.map((s) => ({
+        seatId: s.seatId,
+        nickname: s.nickname ?? `座位${s.seatId}`,
+        rank: ranks.get(s.seatId) ?? 0,
+        timeMs: null,
+        lines: s.lines,
+        score: s.game?.score ?? 0,
+        status: 'finished' as const,
       }));
     } else {
       // sprint：放弃者移出排名（protocol §3），避免出现 rank 0 的“第0名”

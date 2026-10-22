@@ -11,6 +11,7 @@ export * from './engine/score';
 export * from './engine/game';
 export * from './modes/sprint';
 export * from './modes/survival';
+export * from './modes/timed';
 export * from './modes/strategy';
 export * from './protocol/messages';
 export * from './protocol/snapshot';

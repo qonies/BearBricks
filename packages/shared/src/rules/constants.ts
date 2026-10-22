@@ -16,6 +16,11 @@ export const MAX_LEVEL = 20;
 
 export const SPRINT_TIMEOUT_MS = 300_000; // sprint 超时固定 300s（不可调）
 export const RESPAWN_DELAY_MS = 3_000; // timed 模式固定常量（不可调）
+/** timed 复活后的免伤窗（不收发攻击），requirements §4.5 */
+export const TIMED_IMMUNE_MS = 3_000;
+/** timed timeLimit 可选值（requirements §4.4 FR-2.6，默认 180） */
+export const TIMED_TIME_LIMITS = [120, 180, 300];
+export const TIMED_DEFAULT_TIME_LIMIT = 180;
 
 /** Guideline 重力：秒/行 = (0.8 - (level-1)*0.007)^(level-1) */
 export function gravitySecondsPerLine(level: number): number {

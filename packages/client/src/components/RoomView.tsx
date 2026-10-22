@@ -36,7 +36,9 @@ export function RoomView({ onExit }: { onExit: () => void }) {
             ? `竞速赛 ${room.settings.targetLines ?? 40} 行`
             : room.settings.mode === 'survival'
               ? '生存淘汰'
-              : room.settings.mode}
+              : room.settings.mode === 'timed'
+                ? `限时赛 ${room.settings.timeLimit ?? 180} 秒`
+                : room.settings.mode}
         </div>
       </div>
 
@@ -60,9 +62,7 @@ export function RoomView({ onExit }: { onExit: () => void }) {
                 >
                   <option value="sprint">竞速赛 sprint</option>
                   <option value="survival">生存淘汰 survival</option>
-                  <option value="timed" disabled>
-                    限时赛（M4）
-                  </option>
+                  <option value="timed">限时赛 timed</option>
                 </select>
                 {room.settings.mode === 'sprint' && (
                   <select
@@ -74,6 +74,19 @@ export function RoomView({ onExit }: { onExit: () => void }) {
                   >
                     <option value={20}>20 行</option>
                     <option value={40}>40 行</option>
+                  </select>
+                )}
+                {room.settings.mode === 'timed' && (
+                  <select
+                    value={room.settings.timeLimit ?? 180}
+                    onChange={(e) =>
+                      net.send('room.updateSettings', { mode: 'timed', timeLimit: Number(e.target.value) })
+                    }
+                    className="rounded bg-slate-700 px-2 py-1"
+                  >
+                    <option value={120}>120 秒</option>
+                    <option value={180}>180 秒</option>
+                    <option value={300}>300 秒</option>
                   </select>
                 )}
               </div>

@@ -2,12 +2,13 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v1.3 |
+| 版本 | v1.4 |
 | 日期 | 2026-10-22 |
 | 关联 | `technical-design.md` §4、`requirements.md`、实现 `packages/shared/src/protocol/` |
 | v1.1 变更 | 补 seed 下发、soft 持续态、inputBatch、game.state.full/seq 基线、rematch、addBot difficulty、error/ping 结构、坐标方向约定、房间码爆破限流、resumeToken 轮换 |
 | v1.2 变更 | M3 survival：新增 `game.attack`；`modeState.survival {aliveCount, pendingGarbage}`；对手快照 `status` 增加 `eliminated`、可选 `pendingGarbage` |
 | v1.3 变更 | `RankingEntry.status` 增加 `eliminated`（survival 淘汰不再混用 `finished`）；`game.topOut` 明确 sprint 顶出由引擎内部清盘处置、不下发本事件；新增每连接入站消息限流（>120 条/s 断开） |
+| v1.4 变更 | M4 timed：`modeState.timed {endsAt, respawnAt?, immuneUntil?}`；`game.start` 增加 `timeLimit`；`room.updateSettings` 放行 `timed`（`timeLimit` ∈ 120/180/300）；`RankingEntry` 增加可选 `score`（timed 排名展示） |
 
 ## 1. 通用约定
 - 通道：单一 WebSocket 连接 `wss(s)://<host>/ws`，全双工，可靠有序（TCP）
@@ -43,7 +44,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 | C→S | `room.join` | `{ roomCode }` | 不存在 E4040；满员/已开局 E4090；失败计 IP 爆破计数 |
 | C→S | `room.quickMatch` | `{}` | 优先公开 WAITING 房，否则自动建公开房 |
 | C→S | `room.leave` | `{}` | PLAYING 中离开视为放弃（sprint：移出排名） |
-| C→S | `room.updateSettings` | `{ mode, targetLines? }` | 仅房主、仅 WAITING；survival 可选；timed 未开放回 E4031（M4） |
+| C→S | `room.updateSettings` | `{ mode, targetLines?, timeLimit? }` | 仅房主、仅 WAITING；survival 可选；**v1.4** timed 可选（`timeLimit` ∈ 120/180/300，默认 180；非法值 E4001，非 timed 携带 `timeLimit` E4031） |
 | C→S | `room.addBot` | `{ seatId, difficulty: 'EASY'\|'NORMAL'\|'HARD' }` | 仅房主、仅 WAITING、目标座位为空 |
 | C→S | `room.removeSeat` | `{ seatId }` | 仅房主、仅 WAITING；被移除真人收 `error E4030 (reason='kicked')` 并回大厅 |
 | C→S | `game.ready` | `{ ready: boolean }` | 玩家准备 |
@@ -51,7 +52,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 | C→S | `room.rematch` | `{}` | 仅房主、仅 FINISHED；→ WAITING（设置保留、AI 保留、ready 重置） |
 | S→C | `room.state` | `{ room: RoomState }` | 任何变更后广播 |
 | S→C | `room.countdown` | `{ seconds: 3, startAt }` | 开局倒计时（startAt 为服务器毫秒时间戳） |
-| S→C | `game.start` | `{ mode, targetLines, seeds: { [seatId]: seed }, startTs }` | **开局下发各座位方块 seed**（对手板本就可见，无窥探增益） |
+| S→C | `game.start` | `{ mode, targetLines, timeLimit?, seeds: { [seatId]: seed }, startTs }` | **开局下发各座位方块 seed**（对手板本就可见，无窥探增益）；**v1.4** timed 携带 `timeLimit`（秒） |
 | S→C | `game.result` | `{ mode, reason: 'finished'\|'timeout', ranking: RankingEntry[] }` | 结束时一次 |
 
 `RoomState`（`room.state` 载荷为 `{ room: RoomState, selfSeatId: number }`，`selfSeatId` 为接收者自身座位号）：
@@ -67,7 +68,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
   ]
 }
 ```
-`RankingEntry`：`{ seatId, nickname, rank, timeMs: number|null, lines, status: 'finished'|'timeout'|'eliminated'|'abandoned' }`（**v1.3**：`eliminated` = survival 淘汰）；sprint 排名：完赛时间升序 → 已清行数降序 → 放弃者移出排名；survival 排名：存活者并列第 1 → 淘汰顺序倒序（同刻并列），abandoned（宽限超时判淘汰）垫底并列，timeMs = 淘汰时刻/存活者 null；同时间/同行数并列。
+`RankingEntry`：`{ seatId, nickname, rank, timeMs: number|null, lines, score?, status: 'finished'|'timeout'|'eliminated'|'abandoned' }`（**v1.3**：`eliminated` = survival 淘汰；**v1.4**：可选 `score` = timed 总分）；sprint 排名：完赛时间升序 → 已清行数降序 → 放弃者移出排名；survival 排名：存活者并列第 1 → 淘汰顺序倒序（同刻并列），abandoned（宽限超时判淘汰）垫底并列，timeMs = 淘汰时刻/存活者 null；**v1.4 timed 排名：总分降序 → 消行数降序 → 顶出次数升序，完全并列，abandoned 移出排名，timeMs 恒为 null**。
 
 ## 4. 游戏内消息
 | 方向 | 类型 | 载荷 | 说明 |
@@ -78,7 +79,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 | S→C | `game.snapshot.self` | 见 §5 | 20Hz + 变化才发（`h` 指纹） |
 | S→C | `game.snapshot.others` | `{ tick, seats: [{seatId, board, active, score, lines, status}] }` | 10Hz，变化才发；省略 queue/hold（防窥探） |
 | S→C | `game.state.full` | `{ seatId, tick, seq, seed, self, room }` | 重连恢复（PLAYING 中宽限内 resume 时下发，welcome 之后） |
-| S→C | `game.topOut` | `{ seatId, action: 'ELIMINATE'\|'RESPAWN'\|'RESET_BOARD' }` | 顶出处置事件：survival = ELIMINATE；timed = RESPAWN（M4）；**sprint 顶出由引擎内部清盘处置，不下发本事件**（v1.3 明确） |
+| S→C | `game.topOut` | `{ seatId, action: 'ELIMINATE'\|'RESPAWN'\|'RESET_BOARD' }` | 顶出处置事件：survival = ELIMINATE；**v1.4 timed = RESPAWN**（顶出即播报，随后该座位 modeState.timed.respawnAt 出现 3s 复活倒计时、immuneUntil 免伤 3s；复活期间输入被静默丢弃）；**sprint 顶出由引擎内部清盘处置，不下发本事件**（v1.3 明确） |
 | S→C | `game.attack` | `{ fromSeat, lines, targets: seatId[] }` | **v1.2** 一次消行攻击（offset 后实际转发行数），全房间广播用于攻击指示；lines ≥1，targets 为其他存活对手 |
 | S→C | `error` | `{ code, message, reason? }` | 错误码见 §8 |
 
@@ -100,7 +101,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 ```
 - `h`：状态指纹（棋盘 + active + 分数/行数/等级/连击/B2B/Hold），双端同一函数（`TetrisGame.stateHash()`）计算；不一致 → 客户端 `applySnapshotState` 重建 + 重放未确认输入
 - 对手快照省略 `queue/hold`；`status` ∈ `playing/finished/eliminated/abandoned`（**v1.2**：`eliminated` = survival 淘汰转观战）；**v1.2** 可选 `pendingGarbage`（该对手待接收垃圾行数，攻击预警可视化）
-- `modeState`：sprint `{target}`；**v1.2** survival `{aliveCount, pendingGarbage}`（pendingGarbage 为己方待接收垃圾行，红色预警条数据源）；timed `{endsAt, respawnAt?}` 为 M4 预留
+- `modeState`：sprint `{target}`；**v1.2** survival `{aliveCount, pendingGarbage}`（pendingGarbage 为己方待接收垃圾行，红色预警条数据源）；**v1.4** timed `{endsAt, respawnAt?, immuneUntil?}`（均为服务器 epoch ms：endsAt 计时归零时刻；respawnAt 复活倒计时截止，仅复活中的座位携带；immuneUntil 免伤截止，复活后 3s）
 
 ## 6. 聊天协议
 | 方向 | 类型 | 载荷 | 说明 |

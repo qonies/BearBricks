@@ -9,7 +9,7 @@
 ## ✨ 特性
 
 - 🎮 **标准手感**：Tetris Guideline 级复刻 —— SRS 踢墙、7-bag、锁定延迟（500ms / 最多 15 次重置）、Hold、Ghost、DAS/ARR 可调、软降/硬降计分
-- 🏁 **对战模式**：sprint 竞速赛（20/40 行）、survival 生存淘汰（攻击 / 垃圾行 / 淘汰观战）；timed 限时赛与三档 AI 规划于 M4/M5
+- 🏁 **对战模式**：sprint 竞速赛（20/40 行）、survival 生存淘汰（攻击 / 垃圾行 / 淘汰观战）、timed 限时赛（120/180/300 秒，顶出 3s 复活 + 免伤）；三档 AI 规划于 M5
 - ⚔️ **公平竞技**：服务端 60Hz 权威模拟，客户端只上报输入（防作弊）；带 seed 的确定性引擎双端复用，乐观渲染 + 快照校正收敛，断线 30s 内重连恢复棋局
 - 💬 **房间社交**：公开房/私密房、房间码加入、快速匹配、准备与房主控制、系统消息 + 纯文本聊天（限流 + 控制字符清洗，React 文本渲染防 XSS）
 - 🔒 **安全基线**：Zod 全量校验、4KB 帧上限、每连接/每 IP 多层限流、Origin 校验、resumeToken 一次性轮换，playerId 不下发
@@ -22,7 +22,7 @@
 | 单人 Marathon / Sprint 40 | ✅ 已上线 | 本地权威运行，最佳成绩持久化 localStorage |
 | sprint 竞速赛（联机） | ✅ 已上线 | 各自独立棋盘，最先清满 N 行者胜，无攻击 |
 | survival 生存淘汰（联机） | ✅ 已上线 | 消行产生攻击/垃圾行（B2B/Combo/PC 加成），被顶出者淘汰转观战仍可聊天，最后存活者胜 |
-| timed 限时赛（联机） | 🚧 M4 | 计时归零比总分，顶出 3s 后清盘复活 + 免伤 |
+| timed 限时赛（联机） | ✅ 已上线 | 固定时长（120/180/300s）比总分，消行产生攻击/垃圾行；顶出 3s 复活（棋盘清空、分数保留）+ 复活后 3s 免伤 |
 | AI 机器人 EASY/NORMAL/HARD | 🚧 M5 | 服务端 BotController，落点评估，与真人同一引擎同一输入通道 |
 
 > **键位**：←/→ 移动 · ↑/X 顺旋 · Z/Ctrl 逆旋 · ↓ 软降 · Space 硬降 · Shift/C Hold · Esc 暂停（仅单人）
@@ -50,10 +50,10 @@ npm run dev          # 终端 2：client（Vite :5173，/ws 已代理到 :3000�
 
 ## 结构
 
-- `packages/shared` — 纯 TS 游戏核心（SRS / 7-bag / 计分 / 顶出 / 垃圾行）+ 协议（Zod）+ 模式策略与排名（sprint / survival，timed 为 M4）
+- `packages/shared` — 纯 TS 游戏核心（SRS / 7-bag / 计分 / 顶出 / 垃圾行）+ 协议（Zod）+ 模式策略与排名（sprint / survival / timed）
 - `packages/server` — Node 22 + Fastify + ws：房间状态机、60Hz 权威 GameLoop、快照节流（己方 20Hz / 对手 10Hz）、断线宽限 30s、心跳 / 限流 / Origin 校验
 - `packages/client` — React 19 + Vite + Zustand：单人本地权威 + 联机乐观渲染（快照校正 + 未确认输入重放）+ 聊天侧栏（i18n 骨架 `src/i18n.ts`）
-- `docs/` — 需求 / 技术设计 / 协议（v1.3）/ 测试计划 / ADR
+- `docs/` — 需求 / 技术设计 / 协议（v1.4）/ 测试计划 / ADR
 - `memory-bank/` — 项目记忆库
 
 ## 环境

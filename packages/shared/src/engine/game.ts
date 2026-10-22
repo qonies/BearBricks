@@ -431,6 +431,24 @@ export class TetrisGame {
     }
   }
 
+  /**
+   * timed 限时赛复活（M4，requirements §4.4/§4.5）：棋盘清空、分数/消行/等级保留、
+   * Hold 保留、Combo/B2B 清零；方块序列（bag/queue）延续 —— 双端（服务端权威 + 客户端预测）
+   * 在同一事件各自调用本方法即可保持一致；调用后 status 恢复 running。
+   */
+  respawn(): void {
+    this.board = createBoard();
+    this.combo = 0;
+    this.b2bActive = false;
+    this.canHold = true;
+    this.topOut = false;
+    this.status = 'running';
+    this.finishTimeMs = null;
+    this.lastClear = null;
+    this.active = null;
+    this.spawnActive();
+  }
+
   /** 服务端权威快照 → 本地状态重建（M2 乐观渲染校正用，技术设计 §5.3） */
   applySnapshotState(s: {
     board: Board;

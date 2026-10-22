@@ -62,6 +62,7 @@
 ## 5. L2 集成用例（Vitest + 真实 ws，随机高位端口）
 > **M2 已落地**：`packages/server/tests/room.integration.test.ts`（TC-ROOM-001/002/005、TC-NET-001/002/003、TC-CHAT-001/002、TC-SEC-001 的自动化覆盖）；
 > **M3 已落地**：`packages/server/tests/survival.integration.test.ts`（TC-MD-B-001/002/004、TC-MD-X-001 + 宽限期不提前终局/resume 复位回归）；
+> **M4 已落地**：`packages/server/tests/timed.integration.test.ts`（TC-MD-C-001/002 结算/复活/免伤、TC-MD-X-001 timed 分支、timeLimit 校验；排名并列口径在 `packages/shared/tests/timed.test.ts` 单测覆盖）；
 > 协议层单测：`packages/shared/tests/protocol.test.ts`；客户端调度器/校正/聊天单测：`packages/client/tests/`。
 > 口径说明：TC-NET-001 的「输入限流」与 TC-SEC-003/008（非法信封/超大帧）已断言；TC-NET-002 的「20Hz/10Hz 频率」属压测口径（TC-PERF-001），集成测试仅覆盖"变化才发"语义。
 

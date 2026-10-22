@@ -1,4 +1,4 @@
-// BearBricks WebSocket 协议（protocol.md v1.3）：Zod schema 双端复用
+// BearBricks WebSocket 协议（protocol.md v1.4）：Zod schema 双端复用
 // 信封：{ t, ts, seq?(上行输入), sseq?(下行序号), d }
 // 坐标约定：board/active 均为数组 top-down（index 0 = 顶部隐藏行），与引擎一致
 
@@ -44,7 +44,8 @@ export const SEAT_SCHEMA = z.object({
 export const ROOM_SETTINGS_SCHEMA = z.object({
   mode: MODE_SCHEMA,
   targetLines: z.union([z.literal(20), z.literal(40)]).optional(),
-  timeLimit: z.number().int().optional(),
+  /** timed 限时赛时长（秒）：120/180/300（FR-2.6） */
+  timeLimit: z.union([z.literal(120), z.literal(180), z.literal(300)]).optional(),
 });
 
 export const ROOM_STATE_SCHEMA = z.object({
@@ -75,13 +76,21 @@ export const SELF_SNAPSHOT_SCHEMA = z.object({
   combo: z.number().int(),
   b2b: z.boolean(),
   elapsedMs: z.number(),
-  /** 模式状态（M3）：sprint 目标行数；survival 存活数 + 自己待接收垃圾行（红色预警条） */
+  /** 模式状态：sprint 目标行数；survival 存活数 + 自己待接收垃圾行（红色预警条）；
+   *  timed（v1.4）：endsAt 归零时刻（服务器 epoch ms）；respawnAt 复活倒计时截止；immuneUntil 免伤截止 */
   modeState: z.object({
     sprint: z.object({ target: z.number().int() }).optional(),
     survival: z
       .object({
         aliveCount: z.number().int().nonnegative(),
         pendingGarbage: z.number().int().nonnegative(),
+      })
+      .optional(),
+    timed: z
+      .object({
+        endsAt: z.number(),
+        respawnAt: z.number().optional(),
+        immuneUntil: z.number().optional(),
       })
       .optional(),
   }),
@@ -114,7 +123,7 @@ export const ROOM_LEAVE_SCHEMA = z.object({});
 export const ROOM_UPDATE_SETTINGS_SCHEMA = z.object({
   mode: MODE_SCHEMA,
   targetLines: z.union([z.literal(20), z.literal(40)]).optional(),
-  timeLimit: z.number().int().optional(),
+  timeLimit: z.union([z.literal(120), z.literal(180), z.literal(300)]).optional(),
 });
 export const ROOM_ADD_BOT_SCHEMA = z.object({
   seatId: SEAT_ID_SCHEMA,
@@ -199,6 +208,8 @@ export const ROOM_COUNTDOWN_SCHEMA = z.object({
 export const GAME_START_S2C_SCHEMA = z.object({
   mode: MODE_SCHEMA,
   targetLines: z.number().int(),
+  /** timed 限时赛时长（秒，v1.4）；其他模式省略 */
+  timeLimit: z.number().int().optional(),
   /** 各座位方块序列种子（seatId → seed）；对手板本就可见，无窥探增益 */
   seeds: z.record(z.string()),
   startTs: z.number(),
@@ -210,7 +221,9 @@ export const RANKING_ENTRY_SCHEMA = z.object({
   rank: z.number().int(),
   timeMs: z.number().nullable(),
   lines: z.number().int(),
-  /** v1.3：eliminated = survival 淘汰；abandoned = 断线宽限超时/主动放弃 */
+  /** v1.4：timed 排名展示总分 */
+  score: z.number().int().optional(),
+  /** eliminated = survival 淘汰；abandoned = 断线宽限超时/主动放弃 */
   status: z.enum(['finished', 'timeout', 'eliminated', 'abandoned']),
 });
 
