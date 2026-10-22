@@ -1,6 +1,31 @@
 # BearBricks 🐻🧱
 
-浏览器端多人俄罗斯方块对战平台：单人可玩、联机 sprint 竞速赛与 survival 生存淘汰（M3）、房间内文字聊天。零门槛（无需登录）。timed 限时赛与真实 AI 计划于 M4/M5 交付。
+[![CI](https://github.com/qonies/BearBricks/actions/workflows/ci.yml/badge.svg)](https://github.com/qonies/BearBricks/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+
+**BearBricks** 是一个零门槛（无需登录）的浏览器端多人俄罗斯方块对战平台：打开网页、输入昵称即可开局——支持单人练习、最多 4 人同房联机对战（真人 + AI 补位）与房间内文字聊天。服务端权威架构 + 客户端乐观渲染，办公室/局域网内即可低延迟开黑。
+
+## ✨ 特性
+
+- 🎮 **标准手感**：Tetris Guideline 级复刻 —— SRS 踢墙、7-bag、锁定延迟（500ms / 最多 15 次重置）、Hold、Ghost、DAS/ARR 可调、软降/硬降计分
+- 🏁 **对战模式**：sprint 竞速赛（20/40 行）、survival 生存淘汰（攻击 / 垃圾行 / 淘汰观战）；timed 限时赛与三档 AI 规划于 M4/M5
+- ⚔️ **公平竞技**：服务端 60Hz 权威模拟，客户端只上报输入（防作弊）；带 seed 的确定性引擎双端复用，乐观渲染 + 快照校正收敛，断线 30s 内重连恢复棋局
+- 💬 **房间社交**：公开房/私密房、房间码加入、快速匹配、准备与房主控制、系统消息 + 纯文本聊天（限流 + 控制字符清洗，React 文本渲染防 XSS）
+- 🔒 **安全基线**：Zod 全量校验、4KB 帧上限、每连接/每 IP 多层限流、Origin 校验、resumeToken 一次性轮换，playerId 不下发
+- 🚀 **零门槛部署**：无账号体系、纯内存房间状态、单 Docker 镜像（`node:22-alpine`）
+
+## 🎮 游戏模式
+
+| 模式 | 状态 | 规则 |
+|---|---|---|
+| 单人 Marathon / Sprint 40 | ✅ 已上线 | 本地权威运行，最佳成绩持久化 localStorage |
+| sprint 竞速赛（联机） | ✅ 已上线 | 各自独立棋盘，最先清满 N 行者胜，无攻击 |
+| survival 生存淘汰（联机） | ✅ 已上线 | 消行产生攻击/垃圾行（B2B/Combo/PC 加成），被顶出者淘汰转观战仍可聊天，最后存活者胜 |
+| timed 限时赛（联机） | 🚧 M4 | 计时归零比总分，顶出 3s 后清盘复活 + 免伤 |
+| AI 机器人 EASY/NORMAL/HARD | 🚧 M5 | 服务端 BotController，落点评估，与真人同一引擎同一输入通道 |
+
+> **键位**：←/→ 移动 · ↑/X 顺旋 · Z/Ctrl 逆旋 · ↓ 软降 · Space 硬降 · Shift/C Hold · Esc 暂停（仅单人）
 
 ## 快速开始
 
@@ -45,3 +70,9 @@ npm run dev          # 终端 2：client（Vite :5173，/ws 已代理到 :3000�
 每轮测试/调试后必须退出后台 node/vite 进程、不占用端口（`afterAll` 强制关闭 + `Get-NetTCPConnection` 抽查）。
 
 详细规则见 `docs/`，里程碑进度见 `memory-bank/progress.md`。
+
+## 📄 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。
+
+> 「Tetris / 俄罗斯方块」名称及相关商标归其权利人所有；本项目为原创代码实现（游戏规则本身不受著作权保护），仅供学习与交流使用。
