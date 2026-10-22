@@ -4,6 +4,7 @@ import type {
   GameResultPayload,
   GameStartPayload,
   GameStateFullPayload,
+  OtherSeatSnapshot,
   RoomState,
   WelcomePayload,
 } from '@bearbricks/shared';
@@ -95,6 +96,11 @@ export default function App() {
           initialSeq: p.seq,
         });
         setScreen({ name: 'game-mp' });
+      }),
+      // 对手快照（10Hz，变化才发）：驱动对手小板/分数/淘汰状态/待收垃圾预警（FR-11.2）
+      net.on('game.snapshot.others', (d) => {
+        const p = d as { seats?: OtherSeatSnapshot[] };
+        if (Array.isArray(p.seats)) useRoomStore.getState().applyOthers(p.seats);
       }),
       net.on('room.countdown', (d) => {
         useRoomStore.getState().setCountdown((d as { seconds: number }).seconds);

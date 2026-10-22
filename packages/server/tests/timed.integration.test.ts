@@ -341,4 +341,67 @@ describe('M4 timed 限时赛（真实 ws）', () => {
 
     a.close();
   }, 30_000);
+
+  it('timed 断线宽限超时 → 计一次顶出并继续复活循环（不 abandoned，仍在排名；FR-10.3）', async () => {
+    const a = new TestClient(port, UUID_A, 'Alice');
+    const b = new TestClient(port, UUID_B, 'Bob');
+    await a.hello();
+    a.send('room.create', { visibility: 'private' });
+    const code = (await a.next('room.state')).d.room.roomCode as string;
+    await b.hello();
+    b.send('room.join', { roomCode: code });
+    await b.next('room.state');
+    b.send('game.ready', { ready: true });
+    a.send('room.updateSettings', { mode: 'timed', timeLimit: 120 });
+    await a.nextWhere('room.state', (d: any) => d.room.settings.mode === 'timed');
+    a.send('game.start', {});
+    await a.next('game.start');
+    await b.next('game.start');
+
+    const room = manager.getRoom(code)!;
+    const seatB = room.seats[1];
+    const token = b.resumeToken;
+    expect(token).toBeTruthy();
+
+    // B 断线并超过 30s 宽限（直接推进时钟调用 checkGrace，等价 5s 扫描周期到期）
+    b.close();
+    await new Promise((r) => setTimeout(r, 300));
+    room.checkGrace(Date.now() + 31_000);
+
+    // FR-10.3：计一次顶出并继续复活循环——不移出排名、座位与 resumeToken 保留
+    expect(seatB.abandoned).toBe(false);
+    expect(seatB.eliminated).toBe(false);
+    expect(seatB.topOuts).toBe(1);
+    expect(seatB.game!.status).toBe('running');
+    expect(seatB.game!.board.every((c) => c === null)).toBe(true); // 棋盘已随复活清空
+    expect(seatB.respawnUntilTick).not.toBeNull();
+    expect(seatB.resumeToken).toBe(token);
+
+    // 在场玩家收到 RESPAWN 处置事件
+    const topOutB = await a.next('game.topOut');
+    expect(topOutB.d).toEqual({ seatId: 1, action: 'RESPAWN' });
+
+    // 迟到的 resume 仍可恢复座位并拿到全量态（含 modeState.timed.respawnAt）
+    const b2 = new TestClient(port, UUID_B, 'Bob');
+    await b2.open();
+    b2.send('hello', { playerId: UUID_B, nickname: 'Bob', resumeToken: token });
+    const w = await b2.next('welcome');
+    expect(w.d.room?.phase).toBe('PLAYING');
+    await b2.next('game.state.full');
+
+    // 计时归零结算：B 仍参与排名（仅 sprint abandoned 移出口径不同）
+    room.seats[0].game!.score = 1000;
+    room.seats[1].game!.score = 500;
+    room.settings.timeLimit = 1;
+    const result = await a.next('game.result', 10000);
+    expect(result.d.mode).toBe('timed');
+    expect(result.d.ranking).toHaveLength(2);
+    const rankB = result.d.ranking.find((r: any) => r.seatId === 1);
+    expect(rankB.rank).toBe(2);
+    expect(rankB.score).toBe(500);
+    expect(rankB.status).toBe('finished');
+
+    a.close();
+    b2.close();
+  }, 30_000);
 });

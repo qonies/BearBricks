@@ -63,6 +63,7 @@
 > **M2 已落地**：`packages/server/tests/room.integration.test.ts`（TC-ROOM-001/002/005、TC-NET-001/002/003、TC-CHAT-001/002、TC-SEC-001 的自动化覆盖）；
 > **M3 已落地**：`packages/server/tests/survival.integration.test.ts`（TC-MD-B-001/002/004、TC-MD-X-001 + 宽限期不提前终局/resume 复位回归）；
 > **M4 已落地**：`packages/server/tests/timed.integration.test.ts`（TC-MD-C-001/002 结算/复活/免伤、TC-MD-X-001 timed 分支、timeLimit 校验；排名并列口径在 `packages/shared/tests/timed.test.ts` 单测覆盖）；
+> **M4.5 已落地（2026-10-22）**：timed 断线宽限超时"计顶出并继续复活循环"集成用例（timed.integration 第 3 用例，FR-10.3 口径回归）；shared/client 新增 status 校正、Hold 出生一致性、垃圾溢出顶出等用例；
 > 协议层单测：`packages/shared/tests/protocol.test.ts`；客户端调度器/校正/聊天单测：`packages/client/tests/`。
 > 口径说明：TC-NET-001 的「输入限流」与 TC-SEC-003/008（非法信封/超大帧）已断言；TC-NET-002 的「20Hz/10Hz 频率」属压测口径（TC-PERF-001），集成测试仅覆盖"变化才发"语义。
 

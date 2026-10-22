@@ -2,9 +2,10 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v1.0 |
+| 版本 | v1.1 |
 | 日期 | 2026-10-22 |
 | 关联 | `requirements.md`、`protocol.md`、`test-plan.md`、`adr/0001~0005` |
+| v1.1 变更 | M4/M4.5 同步：`modes/` 补 `timed.ts`；协议升至 v1.5（self 快照 `status`、timed `pendingGarbage`）；§2.1 目录为 M4 实际状态；§5.2 快照/store 字段更新 |
 
 ## 1. 架构总览
 
@@ -40,15 +41,15 @@ Monorepo（npm workspaces）+ 服务端权威 + 客户端乐观渲染：
 
 ## 2. 包结构与技术选型
 
-### 2.1 目录结构（M3 实际状态）
+### 2.1 目录结构（M4 实际状态）
 ```
 packages/
   shared/src/
     engine/{board.ts, srs.ts, bag.ts, rng.ts, score.ts, garbage.ts, game.ts}
-    modes/{strategy.ts, sprint.ts, survival.ts}
-                                    策略抽象（ADR-0005 落地）+ 各模式排名（timed 为 M4）
+    modes/{strategy.ts, sprint.ts, survival.ts, timed.ts}
+                                     策略抽象（ADR-0005 落地）+ 各模式排名
     rules/{constants.ts, attackTable.ts}
-    protocol/{messages.ts, snapshot.ts}   Zod schema + 快照编解码（v1.3 全量）
+    protocol/{messages.ts, snapshot.ts}   Zod schema + 快照编解码（v1.5 全量）
   server/src/
     {index.ts, app.ts, config.ts}  Fastify + 静态托管 + /healthz + 优雅停机
     net/{wsHub.ts, session.ts}     升级握手/Origin/IP 限流；会话心跳/校验/入站限流
@@ -141,7 +142,8 @@ interface GameModeStrategy {
   - 一致 → 仅确认 `seq`（快照携带服务器已应用的最大输入 seq）
   - 不一致 → `applySnapshotState` 直接覆盖为权威态，**保留未确认输入并按 seq 升序重放**（俄罗斯方块动作可重放，代价低）
 - 快照携带 `seed`（开局 `game.start` 下发 / 重连 `game.state.full` 再次确认），保证客户端预测引擎与服务端同一方块序列
-- 重连恢复：服务器发送 `game.state.full`（全量快照 + modeState + 房间态），客户端重建场景
+- 快照携带座位 `status`（v1.5）：权威 `playing` 映射回引擎 `running`（本地预测顶出但权威仍在打的场景必须解除 finished，否则客户端永久卡死）；`eliminated/abandoned/finished` → 引擎 `finished`（观战/终局）
+- 重连恢复：服务器发送 `game.state.full`（全量快照 + modeState + 房间态），客户端重建场景；FINISHED 阶段重连会补发缓存的 `game.result`
 
 ### 4.4 性能预算
 - 单客户端下行预算 < 10KB/s（4 人房间，**按"变化才发"优化后**；未压缩理论上界 ≈ 20Hz×~400B + 3×10Hz×~300B ≈ 17KB/s，依赖快照指纹去重与对手板变化率收敛；M6 压测 TC-PERF-001 实测修正）；快照用行编码（22 行 × 10 格 → 220 字符，无分隔符）
@@ -157,9 +159,9 @@ interface GameModeStrategy {
 ### 5.2 状态（Zustand）
 | store | 内容 |
 |---|---|
-| `useRoomStore` | RoomState、selfSeatId、对手板视图（opponents）、mpStart（seed/快照基线）、countdown、result、toast |
+| `useRoomStore` | RoomState、selfSeatId、对手板视图（opponents，来自 `game.snapshot.others`）、mpStart（seed/快照基线）、countdown、result、toast、chatLog |
 | `useSettings` | DAS/ARR/Ghost 等本地设置（localStorage 持久化） |
-| 待 M3+ | pendingGarbage、攻击预警、淘汰观战状态等（随 survival/timed 引入） |
+| 已落地（M3/M4） | pendingGarbage（survival/timed 预警条）、攻击预警、淘汰观战状态、timed 计时/复活/免伤 HUD |
 
 ### 5.3 输入系统
 - keydown/keyup 监听 → 按键映射（可改键）→ DAS/ARR 调度器（时间戳驱动）→ 动作队列

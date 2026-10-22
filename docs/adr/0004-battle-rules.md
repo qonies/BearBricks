@@ -13,7 +13,7 @@
 | 顶出后果 | 棋盘重置继续冲线 | 淘汰→观战 | 3s 复活，棋盘清空、分数保留、3s 免伤 |
 | 结束 | 全员完赛或 300s 超时 | 仅剩 1 人或同时顶出 | 计时归零 |
 | 排名 | 完赛时间→已清行数 | 淘汰顺序倒序 | 总分→消行数→顶出次数 |
-| 默认参数 | targetLines=40, timeLimit=300s | — | timeLimit=180s, respawnDelay=3s |
+| 默认参数 | targetLines=40；300s 超时（固定，不可调） | — | timeLimit=180s, respawnDelay=3s |
 
 - 攻击表（survival/timed）：Single 0 / Double 1 / Triple 2 / Tetris 4；T-Spin Mini Single 1 / T-Spin Single 2 / Double 4 / Triple 6；B2B ×1.5 向上取整；Combo 第 2 连起每连 +1（上限 +5）；Perfect Clear +10
 - 垃圾行：每行 1 洞、同批次同列；先抵消（offset）自己 pending 垃圾，剩余发给对手；500ms 缓冲后整批插入

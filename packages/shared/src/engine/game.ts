@@ -190,7 +190,13 @@ export class TetrisGame {
    */
   receiveGarbage(rows: number, holeCol: number): void {
     if (this.status !== 'running' || rows <= 0) return;
-    insertGarbage(this.board, rows, holeCol);
+    // 顶部方块被挤出棋盘 = 溢出（Guideline：堆叠被垃圾推出场地上界）→ 按模式顶出处置，
+    // 不能静默丢弃方块（否则垃圾可以"吃掉"对手顶部堆叠而不判负）
+    const overflow = insertGarbage(this.board, rows, holeCol);
+    if (overflow) {
+      this.handleTopOut();
+      return;
+    }
     if (this.active) this.active = { ...this.active, y: this.active.y - rows };
     this.validateActiveAfterBoardChange();
   }
@@ -328,10 +334,12 @@ export class TetrisGame {
         this.gravityAcc = 0;
         return true;
       }
+      // 换回 Hold 的块：走与 spawnActive 相同的"出生下移一格"，只做一次
+      this.postSpawnDrop();
     } else {
+      // Hold 为空：从队列取新块，spawnActive 内部已含出生下移，不再重复
       this.spawnActive();
     }
-    this.postSpawnDrop();
     this.lowestY = this.active ? this.active.y : SPAWN_Y;
     this.lockTimer = 0;
     this.lockResets = 0;
@@ -476,7 +484,14 @@ export class TetrisGame {
     this.combo = s.combo;
     this.b2bActive = s.b2bActive;
     this.elapsedMs = s.elapsedMs;
-    if (s.status) this.status = s.status;
+    if (s.status) {
+      this.status = s.status;
+      // 权威快照说仍在进行 → 清除本地预测残留的顶出终局（乐观渲染校正无法自行恢复）
+      if (s.status === 'running') {
+        this.topOut = false;
+        this.finishTimeMs = null;
+      }
+    }
     if (s.softDrop !== undefined) this.softDrop = s.softDrop;
     this.gravityAcc = 0;
     this.lockTimer = 0;

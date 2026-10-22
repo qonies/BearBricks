@@ -26,8 +26,15 @@ export class NetClient {
 
   status: NetStatus = 'idle';
   resumeToken: string | null = localStorage.getItem(TOKEN_KEY);
+  /** 服务器时钟偏移（server ts - 本地 Date.now()），timed 计时显示用，消除客户端时钟偏差 */
+  private clockOffsetMs = 0;
 
   constructor(private identity: () => { playerId: string; nickname: string }) {}
+
+  /** 以服务器时钟为基准的"当前时刻"（每条 S→C 消息的 ts 持续校正；timed HUD/冻结窗口用它比较） */
+  serverNow(): number {
+    return Date.now() + this.clockOffsetMs;
+  }
 
   on(type: string, handler: Handler): () => void {
     let set = this.handlers.get(type);
@@ -97,6 +104,10 @@ export class NetClient {
       return;
     }
     const { t, d } = msg;
+    // 服务器时钟偏移校正（忽略单向下行延迟，误差 ≤ RTT，远小于时钟偏差本身）
+    if (typeof msg.ts === 'number' && Number.isFinite(msg.ts)) {
+      this.clockOffsetMs = msg.ts - Date.now();
+    }
     if (t === 'ping') {
       const id = (d as { id?: number } | null)?.id ?? 0;
       this.rawSend('pong', { id });

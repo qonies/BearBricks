@@ -1,5 +1,5 @@
 // 房间屏（FR-2）：座位 / 准备 / 房主控制 / 倒计时
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Difficulty } from '@bearbricks/shared';
 import { net } from '../net/netClient';
 import { useRoomStore } from '../store/room';
@@ -9,6 +9,19 @@ export function RoomView({ onExit }: { onExit: () => void }) {
   const selfSeatId = useRoomStore((s) => s.selfSeatId);
   const countdown = useRoomStore((s) => s.countdown);
   const [botDifficulty, setBotDifficulty] = useState<Difficulty>('EASY');
+  // 开局倒计时本地递减（服务端只发一次 seconds，客户端按秒倒数到 0）
+  const [countdownLeft, setCountdownLeft] = useState<number | null>(null);
+  useEffect(() => {
+    if (countdown == null) {
+      setCountdownLeft(null);
+      return;
+    }
+    setCountdownLeft(countdown);
+    const iv = setInterval(() => {
+      setCountdownLeft((t) => (t != null && t > 0 ? t - 1 : 0));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [countdown]);
 
   if (!room || selfSeatId == null) return null;
 
@@ -150,9 +163,9 @@ export function RoomView({ onExit }: { onExit: () => void }) {
 
       {room.phase === 'FINISHED' && <div className="text-sm text-slate-400">对局已结束，等待房主「再来一局」…</div>}
 
-      {countdown != null && (
+      {countdownLeft != null && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/70">
-          <div className="text-8xl font-black text-emerald-400">{countdown}</div>
+          <div className="text-8xl font-black text-emerald-400">{countdownLeft}</div>
         </div>
       )}
     </div>

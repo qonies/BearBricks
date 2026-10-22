@@ -21,15 +21,15 @@
 ## 目录结构（M3 + 全量审查修复后实际状态，2026-10-22）
 ```
 packages/
-  shared/    纯 TS 引擎 + 规则 + 协议（engine/*、rules/*、modes/{strategy,sprint,survival,timed}.ts、protocol/{messages,snapshot}.ts）+ tests/（Vitest 77 用例）
-  client/    React19+Vite6+Tailwind4+Zustand（net/{netClient,identity}、game/*、components/{Lobby,RoomView,GameView,GameViewMP,ChatPanel}、i18n.ts）+ tests/（13 用例）
-  server/    Fastify+ws（net/{wsHub,session}、room/{roomManager,room}、app/index/config）+ tests/（真实 ws 集成 10 用例，vitest fileParallelism=false）
-docs/        需求/技术/协议(v1.4)/测试/ADR
+  shared/    纯 TS 引擎 + 规则 + 协议（engine/*、rules/*、modes/{strategy,sprint,survival,timed}.ts、protocol/{messages,snapshot}.ts）+ tests/（Vitest 83 用例）
+  client/    React19+Vite6+Tailwind4+Zustand（net/{netClient,identity}、game/*、components/{Lobby,RoomView,GameView,GameViewMP,ChatPanel}、i18n.ts）+ tests/（16 用例）
+  server/    Fastify+ws（net/{wsHub,session}、room/{roomManager,room}、app/index/config）+ tests/（真实 ws 集成 11 用例，vitest fileParallelism=false）
+docs/        需求/技术(v1.1)/协议(v1.5)/测试/ADR
 memory-bank/ 本记忆库
 ```
 
 ## 命令（实际可用）
-- `npm test` —— shared(68) + client(13) + server(8) 全部 Vitest
+- `npm test` —— shared(83) + client(16) + server(11) 全部 Vitest（server 集成较慢 ~40s，可按文件单独跑）
 - `npm run test:coverage` —— shared 覆盖率（V8，阈值 90/80/85/90 见 `packages/shared/vitest.config.ts`）
 - `npm run build` —— client（tsc+vite）+ server（esbuild → `dist/index.mjs`，shared 打进 bundle）
 - `npm start` —— 运行 server 构建产物（静态托管 client dist + ws；`CLIENT_DIST` 可覆盖目录）

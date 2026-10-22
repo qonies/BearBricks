@@ -1,43 +1,48 @@
 # 当前工作上下文（Active Context）
 
 ## 当前阶段
-**M4 timed 限时赛完成**（2026-10-22：协议升 v1.4 + TimedStrategy/computeTimedRanking/引擎 respawn + Room 复活/免伤/计时归零 + 客户端 HUD；用例 shared 77 + client 13 + server 10 全绿）
+**M4.5 全量代码审查修复完成**（2026-10-22：协议升 v1.5；修复对手快照客户端缺失、乐观渲染 status 卡死、timed 宽限口径、垃圾溢出、Hold 双重下移等 13 项 + 文档/记忆库同步；用例 shared 83 + client 16 + server 11 全绿）
 
-## 本轮产出（2026-10-22，M4 timed 限时赛）
-### shared
-- `modes/timed.ts`：`computeTimedRanking`（总分降序 → 消行降序 → 顶出次数升序；完全同值并列；abandoned 移出排名）
-- `modes/strategy.ts`：`TimedStrategy`（攻击 = calcAttack 与 survival 同表；onTopOut = RESPAWN；engineMode = marathon）；工厂注册（原 throw 移除）
-- 引擎 `TetrisGame.respawn()`：棋盘清空、score/lines/level/hold 保留、combo/b2b 清零、status 恢复 running、bag 序列延续（双端各自调用保持一致）
-- 常量：`TIMED_IMMUNE_MS=3000`、`TIMED_TIME_LIMITS=[120,180,300]`、`TIMED_DEFAULT_TIME_LIMIT=180`
-- 协议 v1.4：`modeState.timed {endsAt, respawnAt?, immuneUntil?}`（服务器 epoch ms）；`game.start` 增 `timeLimit`；`room.updateSettings` 放行 timed（timeLimit 字面量联合校验）；`RankingEntry` 增可选 `score`
+## 本轮产出（2026-10-22，M4.5 修复，起因 = 全量文档+代码审查）
 
-### server（room.ts）
-- `updateSettings` 放行 timed：timeLimit 校验（schema 字面量联合 + Room 兜底），未传时切模式默认 180；非 timed 带 timeLimit → E4031
-- 顶出处置 `markSeatGameEnded` timed 分支：topOuts+1、respawnUntilTick = tick+180、immuneUntilTick = +360、pendingGarbage/garbageDueTick 清空、`game.respawn()`、广播 `game.topOut RESPAWN` + `chat.system RESPAWN`
-- tickStep：座位循环中先清理过期 immuneUntilTick，再处理 respawnUntilTick（倒计时中 continue = 棋盘/输入/垃圾全冻结，到点复位）
-- `attackTargets()`：timed 再排除复活倒计时/免伤窗座位（survival 用原 aliveSeats）
-- `insertDueGarbage` guard 改为仅 sprint 跳过（timed 复用攻击/垃圾链路）
-- 计时归零：`tick*STEP_MS >= timeLimit*1000 → finishGame('timeout')`；宽限超时 timed 计顶出后 abandoned；`finishGame` timed 排名分支（abandoned 移出、score 下发）
-- `selfModeState` timed 分支（loopStart+tick 换算 epoch ms）；self 快照变化 key 增 timed.respawnAt/immuneUntil
+### P0（多人核心功能）
+- **客户端从未订阅 `game.snapshot.others`** → 对手小板/分数/淘汰状态/预警全部不显示。修复：`App.tsx` 注册 handler → `applyOthers`（服务端本来就 10Hz 下发，纯客户端缺陷；无组件/E2E 测试所以一直没暴露）
+- **`applySnapshotState` 不恢复 status → 本地预测顶出后客户端永久卡死**（快照无 status 字段，resync 无法解除 finished）。修复：协议 v1.5 给 self 快照（含 game.state.full.self）加可选 `status`；`NetGameRunner` 把权威 playing→引擎 running、eliminated/abandoned/finished→finished（hash 一致时也同步）；`GameViewMP` 改用服务端 status 驱动观战显示 + `game.topOut` 即时反馈
 
-### client
-- `netGame.ts`：`syncTimed()`（快照 modeState.timed 驱动：respawnAt 出现 = 清空 inputLog + `game.respawn()` + 冻结输入至 respawnAt；消失 = 解冻）；frame loop 与 dispatch 均受 frozen() 约束
-- `GameViewMP`：timed HUD（剩余时间 formatClock、最后 10s 变红、得分/消行/等级）、复活倒计时横幅、🛡 免伤横幅、标题"限时赛"；结算屏 timed 显示"分数 · 行数"
-- `RoomView`：timed 选项启用 + 120/180/300 秒选择器 + 房间信息标签
+### P1（规则/一致性）
+- **timed 断线宽限超时改为"计一次顶出并继续复活循环"**（用户确认按需求 FR-10.3 改代码，不再 abandoned）：`checkGrace` 按模式处置（sprint=abandoned+token 作废 / survival=eliminated+ELIMINATE 播报 / timed=markSeatGameEnded 复活循环，座位与 resumeToken 保留、迟到 resume 可恢复）；`disconnectedAt` 处置后清空防重复触发；新增 timed 集成用例验证（不 abandoned、仍在排名、迟到 resume、计时归零仍在排名）
+- timed 顶出处置清空 `pendingInputs`/`softDrop`（复活后不得重放旧输入）；客户端 `syncTimed` 同步 `setSoft(false)`
+- **垃圾行溢出 → 顶出**：`receiveGarbage` 使用 `insertGarbage` 的 discarded 信号（此前被忽略 → 满盘插垃圾方块凭空消失且不判负）；marathon→finished/topOut，sprint→清盘重来
+- **Hold 双重出生下移**：`holdSwap` 空 Hold 分支 `spawnActive()` 已含 postSpawnDrop，末尾又调一次 → 出生块多降一格；修复后 Hold 出生与正常出生 y 一致
+- timed 计时改用**服务器校正时钟**：`NetClient.serverNow()`（每条 S→C 消息 ts 持续校正偏移），HUD 剩余时间/复活/免伤与 `NetGameRunner.now`（冻结窗口）全部改用
+- 房主补位/转让：`join` 时 hostSeat 已无人（房主离开仅剩 AI）→ 加入者自动成为房主；`transferHost` 优先在线真人（protocol §7 口径）
+- FR-4.3 落地：无空位但有 AI 座位时真人加入可替换 AI（仅 WAITING）
+- FINISHED 重连补发缓存的 `game.result`（Room.lastResult）；客户端收到 result → `runner.paused`（停引擎停输入，消除 E4031 Toast 刷屏）
+- VICTORY 系统消息补 `nickname` 参数（此前渲染为" 获得胜利！"）
+- 开局倒计时本地每秒递减（此前恒显"3"）
+- timed 快照 modeState 增加 `pendingGarbage` → 预警条对 timed 生效 + HUD 增加实时排名（按 opponents 分数即时比较）
+- 聊天服务端 trim + 空白消息不广播
 
-### 测试（shared 77 + client 13 + server 10）
-- shared `timed.test.ts` 9 用例：策略/排名三键排序/并列/abandoned/引擎 respawn/modeState.timed schema
-- server `timed.integration.test.ts` 2 用例：全流程（timeLimit 校验 E4001→默认 180→改 120→攻击→顶出 RESPAWN→冻结期输入丢弃→免伤期内不被攻击→归零结算排名→rematch 无残留）+ abandoned 移出排名；tick 推进用 `room.settings.timeLimit = 1` 测试钩子触发归零
-- 修正 survival 测试：timed 拒绝断言 → timed 接受（默认 180）
-- **server vitest.config.ts（新）**：`fileParallelism: false`（三个集成测试各带 60Hz loop，并行争用 CPU 使权威 tick 落后墙钟、以 tick 计时的断言不稳）
-- 测试等待一律轮询（waitUntil）而非固定 sleep
+### P2/P3
+- Hold/Next 小窗 HiDPI（`render.hiDpiCanvas` + `drawMini` 逻辑尺寸参数，单人/多人两屏）；Lobby 文案去"M2 sprint"；快照去重 key 增加 timed.pendingGarbage/status
+
+### 测试（shared 83 + client 16 + server 11）
+- shared：+6（applySnapshotState status 恢复/落地、Hold 出生一致性 ×2、垃圾溢出顶出/正常回归）
+- client：+3（resync 恢复 running、权威 eliminated→finished 观战、hash 一致也同步 status）
+- server：+1（timed 宽限超时复活循环全流程）
+
+### 文档同步（本轮）
+- protocol.md **v1.5**（变更行 + §5 status/pendingGarbage + §7 timed 宽限/房主转让 + §9 固定窗口措辞）
+- technical-design.md v1.1（§2.1 目录 M4 实际状态、§4.3 status 校正、§5.2 store 现状）
+- ADR-0004 sprint 参数行措辞；README 协议版本 v1.5
+- techContext（用例数）/progress（M5 行、M4.5 条目）修正
 
 ## 已确认的关键决策（历史 + 本轮新增）
-1-10 同前（见 git 历史 / progress.md）
-11. **M4**：timed 引擎语义 marathon，顶出后 Room 立即 `respawn()`（棋盘清空）但冻结至 respawnUntilTick（3s 倒计时），免伤 = respawnUntilTick+180；免伤/倒计时内不作攻击目标、输入静默丢弃（客户端清 inputLog 防重放污染）；快照不含 status，客户端复活靠 modeState.timed.respawnAt 驱动本地 `respawn()`；endsAt = loopStart + timeLimit*1000（epoch ms，客户端直接与本地时钟比较）；timed 排名 abandoned 移出（与 sprint 口径一致）；宽限超时 timed 计顶出
+1-11 同前（见 git 历史 / progress.md）
+12. **M4.5**：断线宽限超时三模式口径 = sprint 移出排名（abandoned）/ survival 判淘汰（eliminated）/ timed 计顶出并继续复活循环（座位保留，可迟到 resume）；self 快照带 status，客户端以服务端状态为准（本地预测只影响显示流畅性，不决定生死）；垃圾溢出=顶出；timed 计时显示用服务器校正时钟（offset = msg.ts - Date.now()，逐消息更新）
 
 ## 开发顺序约定（重要）
-M4 完成 → AI + 聊天完善（M5：真实 AI 落点评估，聊天 UI 已落地）→ 打磨（M6）
+M4.5 修复完成 → M5：AI 机器人（真实 BotController 3 难度落点评估，替换临时 bot）→ Playwright E2E（TC-UI-002~007，本轮再次证明 L3 缺失会让"服务端发了客户端没接"的 P0 漏网）→ M6 打磨
 
 ## 下一步（M5：AI 机器人）
 1. shared/server：BotController（3 难度落点评估），与真人同一引擎同一输入通道（现临时 bot 每 0.5s 硬降）
@@ -45,8 +50,8 @@ M4 完成 → AI + 聊天完善（M5：真实 AI 落点评估，聊天 UI 已落
 3. Playwright E2E（TC-UI-002~007）
 
 ## 待定项 / 风险提醒
-- 硬降取消 T-Spin（`hardDrop` 中 `lastActionRotation = false`）：遵循需求 §4.2 字面口径，建议 M6 手感评审定夺
+- 硬降保留 T-Spin（`hardDrop` 中仅 d>0 清 `lastActionRotation`）：**代码现状 = 原地硬降保留 T-Spin**，activeContext 旧记录"硬降取消 T-Spin"已过期（本轮核实并在此勘误）；仍建议 M6 手感评审定夺
 - 集成测试对 tick 时序敏感：机器高负载时 tick 落后墙钟（onTimer steps>10 钳制为 1），断言用轮询 + `fileParallelism: false`
 - Dockerfile 未经实际 build 验证；PowerShell 5.1 写文件必须 `[System.IO.File]::ReadAllText/WriteAllText`（UTF-8 无 BOM）
-- 已推送 GitHub：**github.com/qonies/BearBricks**；后续改动直接 `git commit` + `git push`（PS 5.1 对 git 中文参数用 `-F 消息文件`）
+- 已推送 GitHub：**github.com/qonies/BearBricks**；后续改动直接 `git commit` + `git push`（PS 5.1 对 git 中文参数用 `-F 消息文件`，消息文件放 TEMP）
 

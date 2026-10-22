@@ -55,7 +55,7 @@ export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
       </div>
 
       <div className="w-[560px] rounded-2xl border border-slate-700 bg-slate-800/60 p-5">
-        <div className="mb-3 text-lg font-bold text-emerald-400">多人对战（M2 sprint）</div>
+        <div className="mb-3 text-lg font-bold text-emerald-400">多人对战</div>
 
         <label className="mb-3 flex items-center justify-between text-sm">
           <span className="text-slate-300">昵称（≤12 字符）</span>

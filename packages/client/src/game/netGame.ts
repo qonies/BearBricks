@@ -9,6 +9,7 @@ import {
   boardFromString,
   type GameAction,
   type GameModeName,
+  type GameStatus,
   type SelfSnapshot,
 } from '@bearbricks/shared';
 import { AutoShiftScheduler, type Dir } from './autoshift';
@@ -29,6 +30,8 @@ export class NetGameRunner {
   private lastTs = 0;
   private rafId = 0;
   private running = false;
+  /** 时钟源（可注入服务器校正时钟）：timed 冻结窗口以服务器 epoch 为基准 */
+  now: () => number = () => Date.now();
   /** timed：复活倒计时冻结截止（epoch ms）；期间不推进引擎、不上行输入 */
   private freezeUntilMs: number | null = null;
   /** timed：当前生效的复活事件（respawnAt），用于识别新一次顶出复活 */
@@ -61,9 +64,11 @@ export class NetGameRunner {
     const respawnAt = t?.respawnAt ?? null;
     if (respawnAt != null) {
       if (this.activeRespawnAt == null) {
-        // 复活等待期服务端静默丢弃输入：清空未确认日志，避免重放陈旧输入污染新棋盘
+        // 复活等待期服务端静默丢弃输入：清空未确认日志，避免重放陈旧输入污染新棋盘；
+        // 服务端同时清了 softDrop（顶出处置），本地保持一致（松键后重新生效）
         this.inputLog.clear();
         this.game.respawn();
+        this.setSoft(false);
       }
       this.activeRespawnAt = respawnAt;
       this.freezeUntilMs = respawnAt;
@@ -76,7 +81,7 @@ export class NetGameRunner {
   /** timed 冻结判定：倒计时截止前不推进引擎（与服务器冻结窗口对齐） */
   private frozen(): boolean {
     if (this.freezeUntilMs == null) return false;
-    if (Date.now() >= this.freezeUntilMs) {
+    if (this.now() >= this.freezeUntilMs) {
       this.freezeUntilMs = null;
       return false;
     }
@@ -154,6 +159,7 @@ export class NetGameRunner {
   /** 权威快照校正：一致 → 仅确认 seq 并对齐计时；不一致 → 重建 + 重放未确认输入 */
   resync(snap: SelfSnapshot): boolean {
     if (this.game.stateHash() === snap.h) {
+      this.applyServerStatus(snap);
       this.game.elapsedMs = snap.elapsedMs; // 权威计时对齐（stateHash 不含 elapsedMs）
       this.seqCounter = Math.max(this.seqCounter, snap.seq); // seq 单调不减（重连基线）
       this.trimLog(snap.seq);
@@ -171,6 +177,7 @@ export class NetGameRunner {
       combo: snap.combo,
       b2bActive: snap.b2b,
       elapsedMs: snap.elapsedMs,
+      status: this.serverStatusToEngine(snap),
       softDrop: this.softOn,
     });
     this.seqCounter = Math.max(this.seqCounter, snap.seq);
@@ -180,6 +187,38 @@ export class NetGameRunner {
     for (const [, action] of unconfirmed) this.game.applyInput(action);
     this.trimLog(snap.seq);
     return true;
+  }
+
+  /**
+   * 服务端座位状态 → 引擎 status：权威说"仍在进行"而本地已预测顶出 → 必须恢复 running
+   * （快照不含足以重建顶出的信息，乐观渲染校正无法自行解除 finished，否则客户端永久卡死）；
+   * 淘汰/放弃/完赛 → finished（本地停引擎、停输入，进入观战/终局显示）。
+   */
+  private serverStatusToEngine(snap: SelfSnapshot): GameStatus | undefined {
+    if (snap.status == null) return undefined;
+    return snap.status === 'playing' ? 'running' : 'finished';
+  }
+
+  /** hash 一致时也同步座位状态（本地预测顶出但权威仍在打的场景不改变 hash） */
+  private applyServerStatus(snap: SelfSnapshot): void {
+    const status = this.serverStatusToEngine(snap);
+    if (status != null && this.game.status !== status) {
+      this.game.applySnapshotState({
+        board: this.game.board,
+        active: this.game.active,
+        queue: this.game.queue,
+        hold: this.game.hold,
+        canHold: this.game.canHold,
+        score: this.game.score,
+        lines: this.game.lines,
+        level: this.game.level,
+        combo: this.game.combo,
+        b2bActive: this.game.b2bActive,
+        elapsedMs: this.game.elapsedMs,
+        status,
+        softDrop: this.softOn,
+      });
+    }
   }
 
   private trimLog(ackedSeq: number): void {

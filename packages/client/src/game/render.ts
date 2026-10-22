@@ -90,11 +90,36 @@ export function drawOpponentBoard(
   }
 }
 
-/** Hold / Next 小窗：每个元素占据一槽，居中绘制 spawn 形态 */
-export function drawMini(ctx: CanvasRenderingContext2D, types: readonly (PieceType | null)[], cell: number): void {
-  const w = ctx.canvas.width;
-  const slotH = ctx.canvas.height / Math.max(1, types.length);
-  ctx.clearRect(0, 0, w, ctx.canvas.height);
+/** HiDPI 画布：按 devicePixelRatio 设置 backing store 并应用变换，返回逻辑坐标的 2D 上下文 */
+export function hiDpiCanvas(
+  c: HTMLCanvasElement | null,
+  w: number,
+  h: number,
+): CanvasRenderingContext2D | null {
+  if (!c) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  if (c.width !== bw || c.height !== bh) {
+    c.width = bw;
+    c.height = bh;
+  }
+  const ctx = c.getContext('2d');
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+/** Hold / Next 小窗：每个元素占据一槽，居中绘制 spawn 形态（w/h 为逻辑尺寸，缺省取画布属性） */
+export function drawMini(
+  ctx: CanvasRenderingContext2D,
+  types: readonly (PieceType | null)[],
+  cell: number,
+  w: number = ctx.canvas.width,
+  h: number = ctx.canvas.height,
+): void {
+  const slotH = h / Math.max(1, types.length);
+  ctx.clearRect(0, 0, w, h);
   types.forEach((t, i) => {
     if (!t) return;
     const cells = PIECE_CELLS[t][0];

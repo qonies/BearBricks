@@ -161,6 +161,8 @@ export class Room {
   private loop: NodeJS.Timeout | null = null;
   private loopStart = 0;
   private countdownTimer: NodeJS.Timeout | null = null;
+  /** 最近一次对局结果（FINISHED 阶段断线重连时补发，客户端才能显示结算屏） */
+  private lastResult: GameResultPayload | null = null;
 
   constructor(
     readonly code: string,
@@ -241,11 +243,18 @@ export class Room {
 
   join(session: Session): boolean {
     if (this.phase !== 'WAITING') return false;
-    const seat = this.seats.find((s) => s.kind === 'empty');
-    if (!seat) return false;
+    // FR-4.3：优先空位；无空位但有 AI 座位时真人可替换（仅 WAITING）
+    let seat = this.seats.find((s) => s.kind === 'empty');
+    if (!seat) {
+      seat = this.seats.find((s) => s.kind === 'bot');
+      if (!seat) return false;
+    }
     seat.kind = 'human';
     seat.nickname = uniqueNickname(session.nickname, this.seats);
     seat.playerId = session.playerId;
+    seat.difficulty = null;
+    // 房主补位：hostSeat 若已无人（房主离开且仅剩 AI 的房间），加入者自动成为房主（FR-2.3）
+    if (this.seats[this.hostSeat].kind !== 'human') this.hostSeat = seat.seatId;
     seat.ready = seat.seatId === this.hostSeat; // 房主默认已准备（FR-2.5）
     seat.online = true;
     seat.session = session;
@@ -290,28 +299,44 @@ export class Room {
     this.broadcastRoomState();
   }
 
-  /** 断线宽限（FR-10）：由 roomManager 定时扫描调用 */
+  /**
+   * 断线宽限（FR-10）：由 roomManager 定时扫描调用。
+   * PLAYING 中宽限超时按模式处置（FR-10.3）：
+   * - sprint → 移出排名（abandoned，resumeToken 作废）
+   * - survival → 判淘汰（转观战，仍可聊天）
+   * - timed → 计一次顶出并继续复活循环（座位与 resumeToken 保留，可迟到的 resume 恢复）
+   */
   checkGrace(now: number): void {
     for (const seat of this.seats) {
       if (seat.kind !== 'human' || seat.online || !seat.disconnectedAt) continue;
       if (now - seat.disconnectedAt <= GRACE_MS) continue;
-      const disconnectedAt = seat.disconnectedAt;
-      if (this.phase === 'PLAYING' && !seat.abandoned) {
-        // FR-10.3：sprint 宽限超时 → 移出排名；timed → 计顶出后移出排名；
-        // 同时作废 resumeToken（不可再恢复该座位）
-        if (this.settings.mode === 'timed') seat.topOuts += 1;
-        seat.abandoned = true;
-        seat.session = null;
-        seat.resumeToken = null;
-        if (this.hostSeat === seat.seatId) this.transferHost();
-        this.maybeFinish();
-        this.broadcast('chat.system', { code: 'LEAVE', params: { nickname: seat.nickname ?? '' } });
-        this.broadcastRoomState();
-      } else if (this.phase !== 'PLAYING') {
+      if (this.phase !== 'PLAYING') {
         this.leaveSeat(seat.seatId);
         continue;
       }
-      seat.disconnectedAt = this.phase === 'PLAYING' ? disconnectedAt : null;
+      // 每个座位只处置一次
+      seat.disconnectedAt = null;
+      if (this.settings.mode === 'timed') {
+        // timed：计顶出并继续复活循环（不 abandoned，仍参与排名）
+        this.markSeatGameEnded(seat);
+      } else if (this.settings.mode === 'survival') {
+        seat.eliminated = true;
+        seat.eliminatedAtMs = seat.game?.finishTimeMs ?? seat.game?.elapsedMs ?? 0;
+        seat.topOuts += 1;
+        this.broadcast('game.topOut', { seatId: seat.seatId, action: 'ELIMINATE' });
+        this.broadcast('chat.system', {
+          code: 'TOP_OUT',
+          params: { seatId: seat.seatId, nickname: seat.nickname ?? '' },
+        });
+      } else {
+        // sprint：移出排名，同时作废 resumeToken（不可再恢复）
+        seat.abandoned = true;
+        seat.resumeToken = null;
+        this.broadcast('chat.system', { code: 'LEAVE', params: { nickname: seat.nickname ?? '' } });
+      }
+      if (this.hostSeat === seat.seatId) this.transferHost();
+      this.maybeFinish();
+      this.broadcastRoomState();
     }
   }
 
@@ -349,6 +374,17 @@ export class Room {
     return true;
   }
 
+  /** 座位对局状态（protocol v1.5：self 快照与对手快照同一口径） */
+  private seatPlayStatus(seat: Seat): SeatPlayStatus {
+    return seat.abandoned
+      ? 'abandoned'
+      : seat.eliminated
+        ? 'eliminated'
+        : seat.finished
+          ? 'finished'
+          : 'playing';
+  }
+
   /** 重连恢复（PLAYING）：下发全量态（welcome 之后调用，保证客户端先拿到身份） */
   resendFullState(seatId: number): void {
     const seat = this.seats[seatId];
@@ -358,15 +394,22 @@ export class Room {
       tick: this.tick,
       seq: seat.lastSeq,
       seed: seat.seed,
-      self: buildSelfSnapshot(seat.game, this.tick, seat.lastSeq, this.selfModeState(seat)),
+      self: buildSelfSnapshot(seat.game, this.tick, seat.lastSeq, this.selfModeState(seat), this.seatPlayStatus(seat)),
       room: this.publicState(),
     });
+    // FINISHED 阶段重连：game.result 是"过去时"，必须补发，否则客户端没有结算屏/再来一局
+    if (this.phase === 'FINISHED' && this.lastResult) {
+      this.sendToSeat(seat, 'game.result', this.lastResult);
+    }
   }
 
   private transferHost(): void {
-    // 房主转让给最早加入（座位序最小）的其他真人——离线宽限中的真人也可接管（恢复后成为房主）；
-    // 绝不转让给 AI（否则无人能开局/再来一局）；无其他真人时保持原值（空座位加入者自动成为房主）
-    const next = this.seats.find((s) => s.kind === 'human' && s.seatId !== this.hostSeat);
+    // 房主转让优先给在线真人（protocol §7"最早加入的在线玩家"，座位序近似加入顺序）；
+    // 全部离线时退而求其次给宽限中的真人（恢复后成为房主）；绝不转让给 AI；
+    // 无其他真人时保持原值（空座位加入者由 join 补位为房主）
+    const next =
+      this.seats.find((s) => s.kind === 'human' && s.online && s.seatId !== this.hostSeat) ??
+      this.seats.find((s) => s.kind === 'human' && s.seatId !== this.hostSeat);
     if (next) {
       this.hostSeat = next.seatId;
       next.ready = true;
@@ -421,6 +464,8 @@ export class Room {
       // 时刻统一换算为服务器 epoch ms（loopStart + tick 基准），客户端直接与本地时钟比较
       const timed: NonNullable<SelfSnapshot['modeState']['timed']> = {
         endsAt: this.loopStart + this.settings.timeLimit * 1000,
+        // v1.5：timed 与 survival 同口径的攻击预警（红色预警条数据源）
+        ...(seat.pendingGarbage > 0 ? { pendingGarbage: seat.pendingGarbage } : {}),
       };
       if (seat.respawnUntilTick != null)
         timed.respawnAt = this.loopStart + seat.respawnUntilTick * STEP_MS;
@@ -537,6 +582,7 @@ export class Room {
       if (seat.kind === 'human') seat.ready = seat.seatId === this.hostSeat;
     }
     this.tick = 0;
+    this.lastResult = null;
     this.touch();
     this.broadcastRoomState();
   }
@@ -706,12 +752,15 @@ export class Room {
     if (!game) return;
     if (this.settings.mode === 'timed') {
       // timed（requirements §4.4 §C / §4.5）：3s 复活倒计时（棋盘冻结）→ 棋盘清空、
-      // 分数/消行保留、复活后 3s 免伤；待收垃圾随棋盘一并清空（免伤期内不接收攻击）
+      // 分数/消行保留、复活后 3s 免伤；待收垃圾随棋盘一并清空（免伤期内不接收攻击）；
+      // 顶出前排队/按住的输入一并清空（复活后不得重放到新棋盘上）
       seat.topOuts += 1;
       seat.respawnUntilTick = this.tick + RESPAWN_DELAY_MS / STEP_MS;
       seat.immuneUntilTick = seat.respawnUntilTick + TIMED_IMMUNE_MS / STEP_MS;
       seat.pendingGarbage = 0;
       seat.garbageDueTick = null;
+      seat.pendingInputs = [];
+      seat.softDrop = false;
       game.respawn();
       this.broadcast('game.topOut', { seatId: seat.seatId, action: 'RESPAWN' });
       this.broadcast('chat.system', {
@@ -757,9 +806,15 @@ export class Room {
   private sendSelfSnapshots(): void {
     for (const seat of this.seats) {
       if (seat.kind !== 'human' || !seat.game || !seat.session || seat.abandoned) continue;
-      const snap = buildSelfSnapshot(seat.game, this.tick, seat.lastSeq, this.selfModeState(seat));
+      const snap = buildSelfSnapshot(
+        seat.game,
+        this.tick,
+        seat.lastSeq,
+        this.selfModeState(seat),
+        this.seatPlayStatus(seat),
+      );
       const timed = snap.modeState.timed;
-      const key = `${snap.seq}:${snap.h}:${snap.modeState.survival?.pendingGarbage ?? 0}:${timed?.respawnAt ?? 0}:${timed?.immuneUntil ?? 0}`;
+      const key = `${snap.seq}:${snap.h}:${snap.modeState.survival?.pendingGarbage ?? 0}:${timed?.pendingGarbage ?? 0}:${timed?.respawnAt ?? 0}:${timed?.immuneUntil ?? 0}:${snap.status ?? ''}`;
       if (key === seat.lastSelfKey) continue;
       seat.lastSelfKey = key;
       this.sendToSeat(seat, 'game.snapshot.self', snap);
@@ -772,17 +827,10 @@ export class Room {
     const survival = this.settings.mode === 'survival';
     for (const seat of this.seats) {
       if (seat.kind === 'empty' || !seat.game) continue;
-      const status: SeatPlayStatus = seat.abandoned
-        ? 'abandoned'
-        : seat.eliminated
-          ? 'eliminated'
-          : seat.finished
-            ? 'finished'
-            : 'playing';
       const snap = buildOtherSeatSnapshot(
         seat.game,
         seat.seatId,
-        status,
+        this.seatPlayStatus(seat),
         survival ? seat.pendingGarbage : undefined,
       );
       snapshots.set(seat.seatId, snap);
@@ -910,10 +958,14 @@ export class Room {
         status: (s.finishTimeMs != null ? 'finished' : 'timeout') as 'finished' | 'timeout',
       }));
     }
-    // 平局并列第 1 时逐个播报（system 消息不漏人）
+    // 平局并列第 1 时逐个播报（system 消息不漏人；i18n 模板需要 nickname 占位）
     for (const winner of ranking.filter((r) => r.rank === 1))
-      this.broadcast('chat.system', { code: 'VICTORY', params: { seatId: winner.seatId } });
-    this.broadcast('game.result', { mode: this.settings.mode, reason, ranking });
+      this.broadcast('chat.system', {
+        code: 'VICTORY',
+        params: { seatId: winner.seatId, nickname: winner.nickname },
+      });
+    this.lastResult = { mode: this.settings.mode, reason, ranking };
+    this.broadcast('game.result', this.lastResult);
     this.touch();
     this.broadcastRoomState();
   }
@@ -934,7 +986,9 @@ export class Room {
     if (last != null && now - last < 1000)
       return session.rateLimitNotice('发言过于频繁（1 条/秒）');
     seat.chatTimes.push(now);
-    const text = p.text.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 200);
+    // FR-9.3 清洗：去控制字符 + 截断；纯空白消息不广播
+    const text = p.text.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200);
+    if (!text) return;
     this.broadcast('chat.message', {
       seatId: seat.seatId,
       nickname: seat.nickname ?? '',

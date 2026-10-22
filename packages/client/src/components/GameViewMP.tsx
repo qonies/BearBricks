@@ -7,11 +7,13 @@ import {
   type ActivePieceData,
   type ChatMessagePayload,
   type GameAttackPayload,
+  type GameTopOutPayload,
   type SelfSnapshot,
+  type SeatPlayStatus,
 } from '@bearbricks/shared';
 import { net } from '../net/netClient';
 import { NetGameRunner } from '../game/netGame';
-import { drawBoard, drawMini, drawOpponentBoard } from '../game/render';
+import { drawBoard, drawMini, drawOpponentBoard, hiDpiCanvas } from '../game/render';
 import { formatSystemMessage, type SystemCode } from '../i18n';
 import { ChatPanel } from './ChatPanel';
 import { useRoomStore } from '../store/room';
@@ -50,14 +52,15 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
     level: 1,
     score: 0,
     elapsedMs: 0,
-    selfAlive: true,
     timeLeftMs: 0,
     respawnLeftMs: 0,
     immuneLeftMs: 0,
   });
   const [survival, setSurvival] = useState({ aliveCount: 0, pending: 0 });
+  const [selfStatus, setSelfStatus] = useState<SeatPlayStatus>('playing');
   const timedRef = useRef<TimedHudState | null>(null);
   const [attackFlash, setAttackFlash] = useState<{ from: string; lines: number } | null>(null);
+  const opponents = useRoomStore((s) => s.opponents);
 
   // 收到指向自己的攻击 → 短暂闪烁提示（game.attack，protocol §4）
   useEffect(() => {
@@ -91,6 +94,8 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
     const offSelf = net.on('game.snapshot.self', (d) => {
       const snap = d as SelfSnapshot;
       runner.resync(snap);
+      // v1.5：座位状态以服务端权威口径为准（观战/终局显示 + 本地预测卡死校正）
+      setSelfStatus(snap.status ?? 'playing');
       if (snap.modeState.survival) {
         setSurvival({
           aliveCount: snap.modeState.survival.aliveCount,
@@ -101,7 +106,25 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
       if (snap.modeState.timed) {
         timedRef.current = snap.modeState.timed;
         runner.syncTimed(snap.modeState.timed);
+        // v1.5：timed 与 survival 同口径的攻击预警
+        if (snap.modeState.timed.pendingGarbage != null) {
+          setSurvival((s) => ({ ...s, pending: snap.modeState.timed!.pendingGarbage! }));
+        }
       }
+    });
+    // 顶出处置事件：立即反映自身淘汰/复活（不等下一帧快照）；对手状态由 others 快照驱动
+    const offTopOut = net.on('game.topOut', (d) => {
+      const p = d as GameTopOutPayload;
+      const st = useRoomStore.getState();
+      if (st.selfSeatId != null && p.seatId === st.selfSeatId) {
+        setSelfStatus(p.action === 'ELIMINATE' ? 'eliminated' : 'playing');
+      }
+    });
+    // 结算：停本地引擎与输入（服务端已不再接受输入，避免 E4031 轰炸）
+    const offResult = net.on('game.result', () => {
+      runner.paused = true;
+      runner.releaseAll();
+      runner.setSoft(false);
     });
 
     // 聊天（FR-9）：用户消息 + 系统消息（i18n key 渲染）
@@ -134,13 +157,14 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
 
     let lastSig = '';
     let lastHudPush = 0;
+    const serverNow = (): number => net.serverNow(); // timed 计时以服务器时钟为基准（消除客户端时钟偏差）
     const onFrame = (): void => {
       const g = runner.game;
       drawBoard(ctx, g, CELL, useSettings.getState().ghost);
-      const holdCtx = holdRef.current?.getContext('2d');
-      if (holdCtx) drawMini(holdCtx, [g.hold], 18);
-      const nextCtx = nextRef.current?.getContext('2d');
-      if (nextCtx) drawMini(nextCtx, g.queue.slice(0, 5), 18);
+      const holdCtx = hiDpiCanvas(holdRef.current, 96, 48);
+      if (holdCtx) drawMini(holdCtx, [g.hold], 18, 96, 48);
+      const nextCtx = hiDpiCanvas(nextRef.current, 96, 210);
+      if (nextCtx) drawMini(nextCtx, g.queue.slice(0, 5), 18, 96, 210);
       const sig = `${g.lines}|${g.level}|${g.score}|${g.status}`;
       const now = performance.now();
       if (sig !== lastSig || now - lastHudPush > 100) {
@@ -152,13 +176,13 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
           level: g.level,
           score: g.score,
           elapsedMs: g.elapsedMs,
-          selfAlive: g.status === 'running',
-          timeLeftMs: t ? Math.max(0, t.endsAt - Date.now()) : 0,
-          respawnLeftMs: t?.respawnAt != null ? Math.max(0, t.respawnAt - Date.now()) : 0,
-          immuneLeftMs: t?.immuneUntil != null ? Math.max(0, t.immuneUntil - Date.now()) : 0,
+          timeLeftMs: t ? Math.max(0, t.endsAt - serverNow()) : 0,
+          respawnLeftMs: t?.respawnAt != null ? Math.max(0, t.respawnAt - serverNow()) : 0,
+          immuneLeftMs: t?.immuneUntil != null ? Math.max(0, t.immuneUntil - serverNow()) : 0,
         });
       }
     };
+    runner.now = serverNow; // 冻结窗口同样使用服务器校正时钟
     runner.start(
       onFrame,
       mpStart.startTs != null
@@ -222,6 +246,8 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
       offChatMsg();
       offChatSys();
       offAttack();
+      offTopOut();
+      offResult();
       unsubSettings();
       releaseInputs();
       window.removeEventListener('keydown', down);
@@ -235,7 +261,10 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
   const isSurvival = mpStart.mode === 'survival';
   const isTimed = mpStart.mode === 'timed';
   const pendingRows = Math.min(survival.pending, 20);
-  const selfEliminated = isSurvival && !hud.selfAlive;
+  const selfEliminated = isSurvival && (selfStatus === 'eliminated' || selfStatus === 'abandoned');
+  // timed 实时排名（§4.4）：按总分即时比较（对手分来自 others 快照）
+  const timedRank =
+    1 + Object.values(opponents).filter((o) => o.score > hud.score && o.status !== 'abandoned').length;
 
   return (
     <div className="flex min-h-screen items-center justify-center gap-6 bg-slate-900 p-6 text-slate-100">
@@ -258,7 +287,7 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
             style={{ width: BOARD_WIDTH * CELL, height: (TOTAL_HEIGHT - HIDDEN_ROWS) * CELL }}
             className="rounded-lg border border-slate-700"
           />
-          {isSurvival && (
+          {(isSurvival || isTimed) && (
             <div
               className="flex w-4 flex-col-reverse items-stretch justify-start gap-px rounded border border-slate-700 bg-slate-950/60"
               title={`待接收垃圾行：${survival.pending}`}
@@ -297,11 +326,11 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
       <div className="flex w-44 flex-col gap-4">
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
           <div className="mb-1 text-xs text-slate-400">HOLD</div>
-          <canvas ref={holdRef} width={96} height={48} />
+          <canvas ref={holdRef} style={{ width: 96, height: 48 }} />
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
           <div className="mb-1 text-xs text-slate-400">NEXT</div>
-          <canvas ref={nextRef} width={96} height={210} />
+          <canvas ref={nextRef} style={{ width: 96, height: 210 }} />
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-sm">
           {isSurvival ? (
@@ -328,6 +357,10 @@ export function GameViewMP({ onExit }: { onExit: () => void }) {
                 <span className={`font-mono ${hud.timeLeftMs <= 10_000 ? 'text-rose-400' : ''}`}>
                   {formatClock(hud.timeLeftMs)}
                 </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">实时排名</span>
+                <span className="font-mono">#{timedRank}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">得分</span>

@@ -76,8 +76,14 @@ export const SELF_SNAPSHOT_SCHEMA = z.object({
   combo: z.number().int(),
   b2b: z.boolean(),
   elapsedMs: z.number(),
+  /**
+   * 座位对局状态（v1.5，可选）：服务端权威口径，客户端驱动"观战/终局"显示并用于
+   * 校正本地预测卡死（乐观渲染无法从快照恢复 status 的缺陷）。省略 = playing。
+   */
+  status: z.enum(['playing', 'finished', 'eliminated', 'abandoned']).optional(),
   /** 模式状态：sprint 目标行数；survival 存活数 + 自己待接收垃圾行（红色预警条）；
-   *  timed（v1.4）：endsAt 归零时刻（服务器 epoch ms）；respawnAt 复活倒计时截止；immuneUntil 免伤截止 */
+   *  timed（v1.4）：endsAt 归零时刻（服务器 epoch ms）；respawnAt 复活倒计时截止；immuneUntil 免伤截止；
+   *  v1.5 timed 增加 pendingGarbage（与 survival 同口径的攻击预警） */
   modeState: z.object({
     sprint: z.object({ target: z.number().int() }).optional(),
     survival: z
@@ -91,6 +97,7 @@ export const SELF_SNAPSHOT_SCHEMA = z.object({
         endsAt: z.number(),
         respawnAt: z.number().optional(),
         immuneUntil: z.number().optional(),
+        pendingGarbage: z.number().int().nonnegative().optional(),
       })
       .optional(),
   }),
@@ -304,5 +311,6 @@ export type GameStartPayload = z.infer<typeof GAME_START_S2C_SCHEMA>;
 export type GameResultPayload = z.infer<typeof GAME_RESULT_SCHEMA>;
 export type GameStateFullPayload = z.infer<typeof GAME_STATE_FULL_SCHEMA>;
 export type GameAttackPayload = z.infer<typeof GAME_ATTACK_SCHEMA>;
+export type GameTopOutPayload = z.infer<typeof GAME_TOP_OUT_SCHEMA>;
 export type RankingEntry = z.infer<typeof RANKING_ENTRY_SCHEMA>;
 export type ChatMessagePayload = z.infer<typeof CHAT_MESSAGE_SCHEMA>;

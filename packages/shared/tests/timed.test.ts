@@ -109,4 +109,24 @@ describe('timed 快照协议（modeState.timed）', () => {
     expect(() => SELF_SNAPSHOT_SCHEMA.parse(snap)).not.toThrow();
     expect(snap.modeState.timed?.respawnAt).toBeUndefined();
   });
+
+  it('v1.5：self 快照携带座位 status 与 timed.pendingGarbage', () => {
+    const g = new TetrisGame({ mode: 'marathon', seed: 'snap-timed3' });
+    const snap = buildSelfSnapshot(
+      g,
+      5,
+      2,
+      { timed: { endsAt: 1000, pendingGarbage: 3 } },
+      'playing',
+    );
+    expect(() => SELF_SNAPSHOT_SCHEMA.parse(snap)).not.toThrow();
+    expect(snap.status).toBe('playing');
+    expect(snap.modeState.timed?.pendingGarbage).toBe(3);
+    const eliminated = buildSelfSnapshot(g, 5, 2, { timed: { endsAt: 1000 } }, 'eliminated');
+    expect(eliminated.status).toBe('eliminated');
+    // 省略 status 时字段不出现（向后兼容旧客户端）
+    const legacy = buildSelfSnapshot(g, 0, 0, { timed: { endsAt: 1 } });
+    expect('status' in legacy).toBe(false);
+    expect(() => SELF_SNAPSHOT_SCHEMA.parse(legacy)).not.toThrow();
+  });
 });

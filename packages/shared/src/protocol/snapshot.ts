@@ -16,7 +16,13 @@ export type SeatPlayStatus = 'playing' | 'finished' | 'eliminated' | 'abandoned'
 export type SelfModeState = SelfSnapshot['modeState'];
 
 /** 己方权威快照（含重建乐观预测所需全部字段；变化才发由调用方按 h 判断） */
-export function buildSelfSnapshot(g: TetrisGame, tick: number, lastSeq: number, modeState: SelfModeState): SelfSnapshot {
+export function buildSelfSnapshot(
+  g: TetrisGame,
+  tick: number,
+  lastSeq: number,
+  modeState: SelfModeState,
+  status?: SeatPlayStatus,
+): SelfSnapshot {
   return {
     tick,
     seq: lastSeq,
@@ -32,6 +38,7 @@ export function buildSelfSnapshot(g: TetrisGame, tick: number, lastSeq: number, 
     combo: g.combo,
     b2b: g.b2bActive,
     elapsedMs: g.elapsedMs,
+    ...(status != null ? { status } : {}),
     modeState,
   };
 }

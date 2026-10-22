@@ -10,7 +10,8 @@
 | M3 | survival 生存淘汰（攻击/垃圾行/淘汰观战） | ✅ 完成（2026-10-22） |
 | M3.5 | 全量代码审查修复（27 项）+ 协议 v1.3 + 聊天 UI | ✅ 完成（2026-10-22） |
 | M4 | timed 限时赛（计时同步/复活/免伤） | ✅ 完成（2026-10-22） |
-| M5 | AI 机器人（3 难度）+ 聊天 UI | ⬜ 未开始（server 端聊天协议已实现，UI 未做） |
+| M4.5 | 全量审查修复（P0×2 + P1×9 + 文档同步，协议 v1.5） | ✅ 完成（2026-10-22） |
+| M5 | AI 机器人（3 难度，替换临时 bot） | ⬜ 未开始（聊天 UI 已于 M3.5 落地） |
 | M6 | 打磨：设置/音效/可访问性/压测/Docker 部署 | ⬜ 未开始 |
 
 ## 已完成
@@ -40,10 +41,16 @@
   - server：updateSettings 放行 timed（timeLimit 120/180/300 校验、默认 180）；markSeatGameEnded timed 分支（topOuts+1、respawnUntilTick=+180 tick、immuneUntilTick=+360、待收垃圾清空、game.respawn、广播 topOut/RESPAWN + chat.system RESPAWN）；tickStep 复活倒计时冻结 + immuneUntilTick 到期清理；attackTargets() 排除复活/免伤座位；insertDueGarbage 放行 timed；计时归零 finishGame('timeout')；宽限超时计顶出；finishGame timed 排名分支；selfModeState timed（epoch ms）+ 快照 key 增 timed 字段
   - client：NetGameRunner.syncTimed（modeState.timed.respawnAt 驱动本地 respawn + 清 inputLog + 冻结输入）；GameViewMP timed HUD（剩余时间/复活倒计时/免伤横幅/得分）+ 结算屏分数显示；RoomView timed 选项 + 时长选择器
   - 测试：shared `timed.test.ts` 9 用例 + server `timed.integration.test.ts` 2 用例（真实 ws 全流程：校验→攻击→顶出 RESPAWN→冻结→免伤→归零结算→rematch 无残留）+ survival 测试 timed 断言更新；server `vitest.config.ts` `fileParallelism: false`（tick 时序稳定）；**shared 77 + client 13 + server 10 全绿**；protocol.md 升 v1.4、README/test-plan 同步
+- [x] **M4.5 全量审查修复（2026-10-22，协议 v1.5）**：
+  - **P0**：客户端接入 `game.snapshot.others`（此前从未订阅 → 对手小板/预警全部不显示）；self 快照（含 `game.state.full`）增加可选 `status`，`NetGameRunner` 用权威状态校正本地预测卡死（本地顶出 finished 但权威 playing → 恢复 running；eliminated/abandoned/finished → finished 观战/终局），`GameViewMP` 观战显示 + `game.topOut` 即时反馈 + 收到 result 停引擎
+  - **P1**：timed 断线宽限超时按 FR-10.3 改为"计顶出并继续复活循环"（`checkGrace` 三模式分支：sprint abandoned / survival eliminated+播报 / timed 复活循环且保留座位与 resumeToken）；timed 顶出清 `pendingInputs`/`softDrop`（服务端 + 客户端 syncTimed 同步）；`receiveGarbage` 垃圾溢出 → 顶出（此前静默丢方块）；`holdSwap` 修复双重出生下移；timed 计时改用 `NetClient.serverNow()` 服务器校正时钟（HUD + 冻结窗口）；房主补位（hostSeat 空时加入者接任）+ 转让优先在线真人；FR-4.3 真人加入可替换 AI 座位；FINISHED 重连补发 `game.result`；VICTORY 消息补 nickname；倒计时本地每秒递减；timed `modeState.pendingGarbage` 预警条 + 实时排名 HUD；聊天 trim/空白不广播
+  - **P2/P3**：Hold/Next 小窗 HiDPI（`render.hiDpiCanvas`）；Lobby 文案；快照去重 key 补 timed.pendingGarbage/status
+  - **文档同步**：protocol.md v1.5、technical-design.md v1.1（目录/校正策略/store 现状）、ADR-0004 措辞、README 协议版本、techContext 用例数、本文件 M5 行勘误（聊天 UI 已落地）
+  - **测试**：shared 83（+6）/ client 16（+3）/ server 11（+1，timed 宽限复活循环全流程）全绿；typecheck/lint 通过
 
 ## 未开始 / 已知事项
-- 真实 AI（M5，M2 用临时 bot 占位：新块 0.5s 后硬降）与聊天 UI（聊天 UI 已于 M3.5 落地，剩 AI）
-- Playwright E2E（TC-UI-002~007）待装浏览器；带宽/200 房压测（M6）
+- 真实 AI（M5，M2 用临时 bot 占位：新块 0.5s 后硬降）；Playwright E2E（TC-UI-002~007）待装浏览器（M4.5 的 P0 缺陷正是 L3 缺失漏网的实例）；带宽/200 房压测（M6）
+- 硬降与 T-Spin 口径：代码现状 = 原地硬降（d=0）保留 T-Spin、位移硬降取消；建议 M6 手感评审定夺（旧记录"硬降一律取消"已勘误）
 
 ## 经验教训 / 注意事项
 - PowerShell 5.1：命令用 `;` 连接；`$env:XXX` 在同一 shell 会话内跨命令残留（烟测端口前先清理）；`Start-Process` 才是后台运行方式（`&` 不是）

@@ -202,4 +202,88 @@ describe('出生下移与软降计分（M2 前置修复）', () => {
     });
     expect(b.stateHash()).toBe(a.stateHash());
   });
+
+  it('applySnapshotState 携带 status：running 恢复本地预测的顶出卡死 / finished 落地终局', () => {
+    const g = makeGame('marathon', 'snap-status');
+    g.status = 'finished';
+    g.topOut = true;
+    g.finishTimeMs = 123;
+    g.applySnapshotState({
+      board: g.board,
+      active: g.active,
+      queue: g.queue,
+      hold: g.hold,
+      canHold: g.canHold,
+      score: 0,
+      lines: 0,
+      level: 1,
+      combo: 0,
+      b2bActive: false,
+      elapsedMs: 0,
+      status: 'running',
+    });
+    expect(g.status).toBe('running');
+    expect(g.topOut).toBe(false);
+    expect(g.finishTimeMs).toBeNull();
+    expect(g.applyInput('moveR')).toBe(true); // 卡死解除：可继续操作
+
+    const h = makeGame('marathon', 'snap-status2');
+    h.applySnapshotState({
+      board: h.board,
+      active: h.active,
+      queue: h.queue,
+      hold: h.hold,
+      canHold: h.canHold,
+      score: 0,
+      lines: 0,
+      level: 1,
+      combo: 0,
+      b2bActive: false,
+      elapsedMs: 0,
+      status: 'finished',
+    });
+    expect(h.status).toBe('finished');
+    expect(h.applyInput('moveR')).toBe(false);
+  });
+});
+
+describe('Hold 出生下移一致性（holdSwap 不得双重 postSpawnDrop）', () => {
+  it('Hold 为空取新块：出生 y 与正常出生一致（都只下移一格）', () => {
+    const a = makeGame('marathon', 'hold-drop-a');
+    const b = makeGame('marathon', 'hold-drop-a'); // 同 seed 同序列
+    const normalY = a.active!.y;
+    expect(b.applyInput('hold')).toBe(true);
+    expect(b.active!.y).toBe(normalY);
+    expect(b.active!.type).toBe(a.queue[0]);
+  });
+
+  it('Hold 交换回已存块：出生 y 同样只下移一格', () => {
+    const g = makeGame('marathon', 'hold-drop-b');
+    const first = g.active!;
+    expect(g.applyInput('hold')).toBe(true);
+    const swappedY = g.active!.y;
+    g.canHold = true;
+    expect(g.applyInput('hold')).toBe(true);
+    expect(g.active!.type).toBe(first.type);
+    expect(g.active!.y).toBe(swappedY);
+  });
+});
+
+describe('垃圾行溢出（receiveGarbage 顶出判定）', () => {
+  it('堆叠被垃圾推出场地上界 → 按模式顶出（不得静默丢弃方块）', () => {
+    const g = makeGame('marathon', 'garbage-overflow');
+    for (let r = 0; r < 22; r++)
+      for (let c = 0; c < BOARD_WIDTH; c++) g.board[r * BOARD_WIDTH + c] = 'G';
+    g.receiveGarbage(4, 0);
+    expect(g.status).toBe('finished');
+    expect(g.topOut).toBe(true);
+  });
+
+  it('未溢出的垃圾插入不触发顶出（回归：正常攻击链路）', () => {
+    const g = makeGame('marathon', 'garbage-ok');
+    g.receiveGarbage(4, 0);
+    expect(g.status).toBe('running');
+    expect(g.topOut).toBe(false);
+    expect(g.board.slice((22 - 4) * BOARD_WIDTH).every((c, i) => (i % 10 === 0 ? c === null : c === 'G'))).toBe(true);
+  });
 });

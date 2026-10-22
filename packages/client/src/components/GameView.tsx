@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BOARD_WIDTH, HIDDEN_ROWS, TOTAL_HEIGHT } from '@bearbricks/shared';
 import { EngineRunner, type LocalMode } from '../game/engineRunner';
-import { drawBoard, drawMini } from '../game/render';
+import { drawBoard, drawMini, hiDpiCanvas } from '../game/render';
 import { useSettings } from '../store/settings';
 
 const CELL = 30;
@@ -108,10 +108,10 @@ export function GameView({
     const onFrame = (): void => {
       const g = runner.game;
       drawBoard(ctx, g, CELL, useSettings.getState().ghost);
-      const holdCtx = holdRef.current?.getContext('2d');
-      if (holdCtx) drawMini(holdCtx, [g.hold], 20);
-      const nextCtx = nextRef.current?.getContext('2d');
-      if (nextCtx) drawMini(nextCtx, g.queue.slice(0, 5), 20);
+      const holdCtx = hiDpiCanvas(holdRef.current, 96, 52);
+      if (holdCtx) drawMini(holdCtx, [g.hold], 20, 96, 52);
+      const nextCtx = hiDpiCanvas(nextRef.current, 96, 230);
+      if (nextCtx) drawMini(nextCtx, g.queue.slice(0, 5), 20, 96, 230);
       // HUD 节流：数值变化立即更新，计时器最多 10Hz（TC-PERF-004，避免 60 次/秒重渲染）
       const sig = `${g.score}|${g.lines}|${g.level}|${g.combo}|${g.b2bActive}|${g.status}|${g.finishTimeMs}|${g.topOut}`;
       const now = performance.now();
@@ -232,11 +232,11 @@ export function GameView({
       <div className="flex w-44 flex-col gap-4">
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
           <div className="mb-1 text-xs text-slate-400">HOLD</div>
-          <canvas ref={holdRef} width={96} height={52} />
+          <canvas ref={holdRef} style={{ width: 96, height: 52 }} />
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3">
           <div className="mb-1 text-xs text-slate-400">NEXT</div>
-          <canvas ref={nextRef} width={96} height={230} />
+          <canvas ref={nextRef} style={{ width: 96, height: 230 }} />
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-sm">
           {isSprint ? (

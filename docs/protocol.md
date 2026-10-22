@@ -2,13 +2,14 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v1.4 |
+| 版本 | v1.5 |
 | 日期 | 2026-10-22 |
 | 关联 | `technical-design.md` §4、`requirements.md`、实现 `packages/shared/src/protocol/` |
 | v1.1 变更 | 补 seed 下发、soft 持续态、inputBatch、game.state.full/seq 基线、rematch、addBot difficulty、error/ping 结构、坐标方向约定、房间码爆破限流、resumeToken 轮换 |
 | v1.2 变更 | M3 survival：新增 `game.attack`；`modeState.survival {aliveCount, pendingGarbage}`；对手快照 `status` 增加 `eliminated`、可选 `pendingGarbage` |
 | v1.3 变更 | `RankingEntry.status` 增加 `eliminated`（survival 淘汰不再混用 `finished`）；`game.topOut` 明确 sprint 顶出由引擎内部清盘处置、不下发本事件；新增每连接入站消息限流（>120 条/s 断开） |
 | v1.4 变更 | M4 timed：`modeState.timed {endsAt, respawnAt?, immuneUntil?}`；`game.start` 增加 `timeLimit`；`room.updateSettings` 放行 `timed`（`timeLimit` ∈ 120/180/300）；`RankingEntry` 增加可选 `score`（timed 排名展示） |
+| v1.5 变更 | M4.5 修复：`game.snapshot.self` / `game.state.full.self` 增加可选 `status`（座位对局状态，驱动观战/终局显示与本地预测卡死校正）；`modeState.timed` 增加可选 `pendingGarbage`（timed 攻击预警，与 survival 同口径）；timed 断线宽限超时明确为"计一次顶出并继续复活循环"（座位与 resumeToken 保留）；房主转让优先在线真人；入站消息限流为固定 1s 窗口；`chat.system VICTORY` params 增加 `nickname` |
 
 ## 1. 通用约定
 - 通道：单一 WebSocket 连接 `wss(s)://<host>/ws`，全双工，可靠有序（TCP）
@@ -100,8 +101,9 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 }
 ```
 - `h`：状态指纹（棋盘 + active + 分数/行数/等级/连击/B2B/Hold），双端同一函数（`TetrisGame.stateHash()`）计算；不一致 → 客户端 `applySnapshotState` 重建 + 重放未确认输入
+- **`status`（v1.5，可选）**：座位对局状态 `playing/finished/eliminated/abandoned`，与对手快照同口径；客户端用于观战/终局显示，并把权威 `playing` 映射回引擎 `running`（修复本地预测顶出后无法从快照恢复的卡死）
 - 对手快照省略 `queue/hold`；`status` ∈ `playing/finished/eliminated/abandoned`（**v1.2**：`eliminated` = survival 淘汰转观战）；**v1.2** 可选 `pendingGarbage`（该对手待接收垃圾行数，攻击预警可视化）
-- `modeState`：sprint `{target}`；**v1.2** survival `{aliveCount, pendingGarbage}`（pendingGarbage 为己方待接收垃圾行，红色预警条数据源）；**v1.4** timed `{endsAt, respawnAt?, immuneUntil?}`（均为服务器 epoch ms：endsAt 计时归零时刻；respawnAt 复活倒计时截止，仅复活中的座位携带；immuneUntil 免伤截止，复活后 3s）
+- `modeState`：sprint `{target}`；**v1.2** survival `{aliveCount, pendingGarbage}`（pendingGarbage 为己方待接收垃圾行，红色预警条数据源）；**v1.4** timed `{endsAt, respawnAt?, immuneUntil?}`（均为服务器 epoch ms：endsAt 计时归零时刻；respawnAt 复活倒计时截止，仅复活中的座位携带；immuneUntil 免伤截止，复活后 3s）；**v1.5** timed 增加可选 `pendingGarbage`（>0 时携带）
 
 ## 6. 聊天协议
 | 方向 | 类型 | 载荷 | 说明 |
@@ -115,10 +117,10 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 ## 7. 心跳、断线与重连
 - 心跳：服务器 15s 一次 `ping {id}`，客户端回 `pong {id}`；**连续 2 次未响应（30s）判定断线**
 - 断线宽限：**30s** 内携带 resumeToken 重连 → 恢复座位与棋局（PLAYING 中下发 `game.state.full`）
-  - PLAYING 中宽限期的座位：棋盘冻结、不收发数据；宽限超时：survival → 判淘汰；timed → 计顶出；**sprint → 移出排名**（status='abandoned'）
+  - PLAYING 中宽限期的座位：棋盘冻结、不收发数据；宽限超时按模式处置（FR-10.3）：survival → 判淘汰（转观战）；**timed → 计一次顶出并继续复活循环（v1.5 明确：座位与 resumeToken 保留，迟到的 resume 仍可恢复）**；**sprint → 移出排名**（status='abandoned'，resumeToken 作废）
   - 非 PLAYING 阶段宽限超时 → 直接释放座位
 - 主动离开（`room.leave`）：立即释放座位（PLAYING 中视为放弃）
-- 房主断线：宽限内保留；超时 → 转让给最早加入的在线玩家
+- 房主断线：宽限内保留；超时 → 转让给最早加入的**在线**真人（全部离线时退而求其次给宽限中的真人；无其他真人时空位加入者自动补位为房主）
 - 房间回收：WAITING 空房 / FINISHED 后 10 分钟 → 销毁（5s 扫描周期）
 
 ## 8. 错误码
@@ -136,7 +138,7 @@ S→C  welcome    { serverTime, session: { playerId, resumeToken, selfSeatId? },
 
 ## 9. 限流与安全基线
 - 每 IP：并发连接 ≤5、房间创建 ≤3/10min（`ROOM_CREATE_LIMIT` 可覆盖）、**加入失败（房间码爆破）>10 次/10min → E4290**
-- **每连接入站消息 ≤120 条/s（v1.3）**：滑动 1s 窗口计数，超限直接断开（在应用层解析之前生效，防 JSON.parse CPU DoS）
+- **每连接入站消息 ≤120 条/s（v1.3）**：固定 1s 窗口计数（窗口起点对齐首条消息，v1.5 修正"滑动窗口"措辞），超限直接断开（在应用层解析之前生效，防 JSON.parse CPU DoS）
 - 每 IP 并发与限流以 TCP 对端地址为准；部署在可信反代后设 `TRUST_PROXY=1` 才采用 `x-forwarded-for`（防伪造绕过）。**注意：办公室/家庭局域网多玩家共享同一出口 IP 时，上述每 IP 配额为全体共享**（部署文档 §9/technical-design）
 - 每连接：校验失败 ≤10（非法信封/未知类型/校验失败均计数）；聊天限流见 §6；输入 ≤60 action/s
 - WS 层 `maxPayload=4096` 字节：超限帧直接关闭连接（配合应用层 4KB 检查）

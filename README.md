@@ -53,7 +53,7 @@ npm run dev          # 终端 2：client（Vite :5173，/ws 已代理到 :3000�
 - `packages/shared` — 纯 TS 游戏核心（SRS / 7-bag / 计分 / 顶出 / 垃圾行）+ 协议（Zod）+ 模式策略与排名（sprint / survival / timed）
 - `packages/server` — Node 22 + Fastify + ws：房间状态机、60Hz 权威 GameLoop、快照节流（己方 20Hz / 对手 10Hz）、断线宽限 30s、心跳 / 限流 / Origin 校验
 - `packages/client` — React 19 + Vite + Zustand：单人本地权威 + 联机乐观渲染（快照校正 + 未确认输入重放）+ 聊天侧栏（i18n 骨架 `src/i18n.ts`）
-- `docs/` — 需求 / 技术设计 / 协议（v1.4）/ 测试计划 / ADR
+- `docs/` — 需求 / 技术设计 / 协议（v1.5）/ 测试计划 / ADR
 - `memory-bank/` — 项目记忆库
 
 ## 环境
