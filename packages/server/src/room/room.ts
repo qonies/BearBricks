@@ -7,6 +7,7 @@ import {
   Rng,
   RESPAWN_DELAY_MS,
   SPRINT_TIMEOUT_MS,
+  BotController,
   TetrisGame,
   TIMED_DEFAULT_TIME_LIMIT,
   TIMED_IMMUNE_MS,
@@ -67,8 +68,8 @@ export interface Seat {
   abandoned: boolean;
   lines: number;
   disconnectedAt: number | null;
-  lastBotPiece: unknown;
-  botPieceTicks: number;
+  /** M5：AI 控制器（一局一个，beginGame 创建）；null = 非 bot 座位 */
+  bot: BotController | null;
   /** survival：待接收垃圾行数（offset 目标 / 红色预警条） */
   pendingGarbage: number;
   /** 到期插入 tick（500ms 缓冲）；null = 无待插入 */
@@ -111,8 +112,7 @@ function emptySeat(seatId: number): Seat {
     abandoned: false,
     lines: 0,
     disconnectedAt: null,
-    lastBotPiece: null,
-    botPieceTicks: 0,
+    bot: null,
     pendingGarbage: 0,
     garbageDueTick: null,
     garbageRng: null,
@@ -575,8 +575,7 @@ export class Room {
       seat.topOuts = 0;
       seat.respawnUntilTick = null;
       seat.immuneUntilTick = null;
-      seat.lastBotPiece = null;
-      seat.botPieceTicks = 0;
+      seat.bot = null;
       seat.seenOthers.clear();
       seat.lastSelfKey = '';
       if (seat.kind === 'human') seat.ready = seat.seatId === this.hostSeat;
@@ -617,8 +616,15 @@ export class Room {
       seat.finishTimeMs = null;
       seat.abandoned = seat.kind === 'human' && !seat.online;
       seat.lines = 0;
-      seat.lastBotPiece = null;
-      seat.botPieceTicks = 0;
+      seat.bot =
+        seat.kind === 'bot'
+          ? new BotController(seat.difficulty ?? 'NORMAL', {
+              // 误操作 RNG 从对局 seed 派生：同 seed 同难度 bot 行为可复现（服务端权威可重放）
+              rng: new Rng(`${seed}:bot`),
+              // survival/timed 为攻击模式：评估对 4 消（Tetris）加分（技术设计 §6 HARD 压制策略）
+              attackMode: this.settings.mode !== 'sprint',
+            })
+          : null;
       seat.pendingGarbage = 0;
       seat.garbageDueTick = null;
       seat.garbageRng = new Rng(`${seed}:garbage`);
@@ -784,19 +790,13 @@ export class Room {
     });
   }
 
-  /** M2 临时 bot：新块停留 0.5s 后硬降（真实启发式 AI 为 M5 BotController） */
+  /** M5 BotController（技术设计 §6）：每 tick decide() 产出 ≤1 个动作，经与真人相同的 game.applyInput 通道执行 */
   private botTick(seat: Seat): void {
     const game = seat.game;
-    if (!game || !game.active) return;
-    if (game.active !== seat.lastBotPiece) {
-      seat.lastBotPiece = game.active;
-      seat.botPieceTicks = 0;
-      return;
-    }
-    seat.botPieceTicks += 1;
-    if (seat.botPieceTicks < 30) return;
-    seat.botPieceTicks = 0;
-    game.applyInput('hard');
+    if (!game) return;
+    const action = seat.bot?.decide(game);
+    if (!action) return;
+    game.applyInput(action);
     seat.lines = game.lines;
     if (game.status === 'finished') this.markSeatGameEnded(seat);
   }

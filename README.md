@@ -23,7 +23,7 @@
 | sprint 竞速赛（联机） | ✅ 已上线 | 各自独立棋盘，最先清满 N 行者胜，无攻击 |
 | survival 生存淘汰（联机） | ✅ 已上线 | 消行产生攻击/垃圾行（B2B/Combo/PC 加成），被顶出者淘汰转观战仍可聊天，最后存活者胜 |
 | timed 限时赛（联机） | ✅ 已上线 | 固定时长（120/180/300s）比总分，消行产生攻击/垃圾行；顶出 3s 复活（棋盘清空、分数保留）+ 复活后 3s 免伤 |
-| AI 机器人 EASY/NORMAL/HARD | 🚧 M5 | 服务端 BotController，落点评估，与真人同一引擎同一输入通道 |
+| AI 机器人 EASY/NORMAL/HARD | ✅ 已上线 | 服务端 BotController 落点评估（聚合高度/空洞/凹凸度/井深/消行 + Hold 权衡 + 误操作率），每 tick 经与真人相同的 `game.applyInput` 通道执行；误操作 RNG 从对局 seed 派生，可复现 |
 
 > **键位**：←/→ 移动 · ↑/X 顺旋 · Z/Ctrl 逆旋 · ↓ 软降 · Space 硬降 · Shift/C Hold · Esc 暂停（仅单人）
 

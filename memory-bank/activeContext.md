@@ -1,57 +1,42 @@
 # 当前工作上下文（Active Context）
 
 ## 当前阶段
-**M4.5 全量代码审查修复完成**（2026-10-22：协议升 v1.5；修复对手快照客户端缺失、乐观渲染 status 卡死、timed 宽限口径、垃圾溢出、Hold 双重下移等 13 项 + 文档/记忆库同步；用例 shared 83 + client 16 + server 11 全绿）
+**M5 AI 机器人完成**（2026-10-23：shared `ai/bot.ts` BotController 三难度落点评估，替换 M2 临时 bot；server 接入同一 applyInput 通道；shared 92 + client 16 + server 13 全绿；typecheck/lint/build 通过）
 
-## 本轮产出（2026-10-22，M4.5 修复，起因 = 全量文档+代码审查）
+## 本轮产出（2026-10-23，M5）
 
-### P0（多人核心功能）
-- **客户端从未订阅 `game.snapshot.others`** → 对手小板/分数/淘汰状态/预警全部不显示。修复：`App.tsx` 注册 handler → `applyOthers`（服务端本来就 10Hz 下发，纯客户端缺陷；无组件/E2E 测试所以一直没暴露）
-- **`applySnapshotState` 不恢复 status → 本地预测顶出后客户端永久卡死**（快照无 status 字段，resync 无法解除 finished）。修复：协议 v1.5 给 self 快照（含 game.state.full.self）加可选 `status`；`NetGameRunner` 把权威 playing→引擎 running、eliminated/abandoned/finished→finished（hash 一致时也同步）；`GameViewMP` 改用服务端 status 驱动观战显示 + `game.topOut` 即时反馈
+### shared：`src/ai/bot.ts`（新增，index.ts 导出；纯 TS 零依赖）
+- `BOT_DIFFICULTY_PARAMS`：EASY 300ms 思考/15% 误操作、NORMAL 150ms/5%、HARD 60ms/0%（技术设计 §6）
+- 落点评估：`enumeratePlacements`（旋转×列全枚举，出生位碰撞剪枝、同形态同列去重）+ `evaluateBoard`（聚合高度/空洞/凹凸度/累计井深）；cost = 0.510066·聚合 + 0.35663·空洞 + 0.184483·凹凸 + 0.1·井深 − 0.760666·消行（经典调优权重，12 seed×4000 tick 实测 HARD 149 行 / NORMAL 94 / EASY 27，EASY 顶出 8/12、HARD 0）
+- 攻击模式（survival/timed）：4 消额外 −0.8 代价（替代"高度低于均值优先攻击"的复杂判定）
+- `BotController.decide(game)`：每权威 tick 调用一次，返回 ≤1 个 GameAction（新块身份检测 → 思考延迟 → Hold 权衡[margin 0.3] → 误操作扰动 → 旋转→平移→硬降）；卡住 3 tick（踢墙失败/垃圾堵路）兜底硬降，永不挂死；误操作 RNG 由 `${seed}:bot` 派生（独立于 bag/garbage RNG，同 seed 可复现）
+- `simulateBotGame`：无头对局模拟（TC-BOT-001 批量回归/调参用）；调参脚本 `scripts/bot-tune.ts`
 
-### P1（规则/一致性）
-- **timed 断线宽限超时改为"计一次顶出并继续复活循环"**（用户确认按需求 FR-10.3 改代码，不再 abandoned）：`checkGrace` 按模式处置（sprint=abandoned+token 作废 / survival=eliminated+ELIMINATE 播报 / timed=markSeatGameEnded 复活循环，座位与 resumeToken 保留、迟到 resume 可恢复）；`disconnectedAt` 处置后清空防重复触发；新增 timed 集成用例验证（不 abandoned、仍在排名、迟到 resume、计时归零仍在排名）
-- timed 顶出处置清空 `pendingInputs`/`softDrop`（复活后不得重放旧输入）；客户端 `syncTimed` 同步 `setSoft(false)`
-- **垃圾行溢出 → 顶出**：`receiveGarbage` 使用 `insertGarbage` 的 discarded 信号（此前被忽略 → 满盘插垃圾方块凭空消失且不判负）；marathon→finished/topOut，sprint→清盘重来
-- **Hold 双重出生下移**：`holdSwap` 空 Hold 分支 `spawnActive()` 已含 postSpawnDrop，末尾又调一次 → 出生块多降一格；修复后 Hold 出生与正常出生 y 一致
-- timed 计时改用**服务器校正时钟**：`NetClient.serverNow()`（每条 S→C 消息 ts 持续校正偏移），HUD 剩余时间/复活/免伤与 `NetGameRunner.now`（冻结窗口）全部改用
-- 房主补位/转让：`join` 时 hostSeat 已无人（房主离开仅剩 AI）→ 加入者自动成为房主；`transferHost` 优先在线真人（protocol §7 口径）
-- FR-4.3 落地：无空位但有 AI 座位时真人加入可替换 AI（仅 WAITING）
-- FINISHED 重连补发缓存的 `game.result`（Room.lastResult）；客户端收到 result → `runner.paused`（停引擎停输入，消除 E4031 Toast 刷屏）
-- VICTORY 系统消息补 `nickname` 参数（此前渲染为" 获得胜利！"）
-- 开局倒计时本地每秒递减（此前恒显"3"）
-- timed 快照 modeState 增加 `pendingGarbage` → 预警条对 timed 生效 + HUD 增加实时排名（按 opponents 分数即时比较）
-- 聊天服务端 trim + 空白消息不广播
+### server：`room/room.ts` 接入
+- Seat 用 `bot: BotController | null` 替换临时 bot 字段（lastBotPiece/botPieceTicks 删除）；beginGame 按 difficulty+seed 创建（attackMode = mode !== 'sprint'），rematch 清空
+- `botTick`：decide → `game.applyInput(action)`（与真人同一输入通道）→ finished 时 markSeatGameEnded
 
-### P2/P3
-- Hold/Next 小窗 HiDPI（`render.hiDpiCanvas` + `drawMini` 逻辑尺寸参数，单人/多人两屏）；Lobby 文案去"M2 sprint"；快照去重 key 增加 timed.pendingGarbage/status
+### 测试（+9 shared / +2 server）
+- shared `bot.test.ts` 9 用例：难度参数、候选枚举升序、堆到顶空数组、空洞/井深特征、填洞消行、Hold 换块、timed 顶出→respawn→继续对局（topOuts 场景验证）、确定性、TC-BOT-001 批量回归（HARD>EASY×2 且顶出率更低）
+- server `bot.integration.test.ts` 2 用例：TC-BOT-002（WAITING 移除 AI 座位立即空出）+ TC-BOT-001 服务端路径（HARD bot 经同一 GameLoop 落子推进 + 对手快照下发）
 
-### 测试（shared 83 + client 16 + server 11）
-- shared：+6（applySnapshotState status 恢复/落地、Hold 出生一致性 ×2、垃圾溢出顶出/正常回归）
-- client：+3（resync 恢复 running、权威 eliminated→finished 观战、hash 一致也同步 status）
-- server：+1（timed 宽限超时复活循环全流程）
-
-### 文档同步（本轮）
-- protocol.md **v1.5**（变更行 + §5 status/pendingGarbage + §7 timed 宽限/房主转让 + §9 固定窗口措辞）
-- technical-design.md v1.1（§2.1 目录 M4 实际状态、§4.3 status 校正、§5.2 store 现状）
-- ADR-0004 sprint 参数行措辞；README 协议版本 v1.5
-- techContext（用例数）/progress（M5 行、M4.5 条目）修正
+### 文档同步
+- README AI 行 → ✅ 已上线；technical-design §6 补 M5 实现注记（权重/执行模型/RNG 派生）；test-plan 补 TC-BOT 实现状态说明
 
 ## 已确认的关键决策（历史 + 本轮新增）
-1-11 同前（见 git 历史 / progress.md）
-12. **M4.5**：断线宽限超时三模式口径 = sprint 移出排名（abandoned）/ survival 判淘汰（eliminated）/ timed 计顶出并继续复活循环（座位保留，可迟到 resume）；self 快照带 status，客户端以服务端状态为准（本地预测只影响显示流畅性，不决定生死）；垃圾溢出=顶出；timed 计时显示用服务器校正时钟（offset = msg.ts - Date.now()，逐消息更新）
+1-12 同前（见 git 历史 / progress.md）
+13. **M5 BotController**：AI 不直接改棋盘，每 tick `decide()` 产出 ≤1 动作由 Room 经 `game.applyInput` 执行（FR-4.2 同一输入通道）；评估 = 单层全落点枚举 + 启发式（无前瞻搜索，性能足够）；Hold 权衡按 cost margin 0.3；卡住兜底硬降；难度差异 = 思考延迟 + 误操作率（误操作 RNG 从对局 seed 派生保证可复现/可重放）
 
 ## 开发顺序约定（重要）
-M4.5 修复完成 → M5：AI 机器人（真实 BotController 3 难度落点评估，替换临时 bot）→ Playwright E2E（TC-UI-002~007，本轮再次证明 L3 缺失会让"服务端发了客户端没接"的 P0 漏网）→ M6 打磨
+M5 完成 → 剩余：Playwright E2E（TC-UI-002~007，需先安装浏览器；M4.5 的 P0 缺陷正是 L3 缺失漏网的实例）→ M6 打磨（设置/音效/可访问性/压测/Docker 部署）
 
-## 下一步（M5：AI 机器人）
-1. shared/server：BotController（3 难度落点评估），与真人同一引擎同一输入通道（现临时 bot 每 0.5s 硬降）
-2. 验证 timed 下 bot 反复顶出 → topOuts 累计正确
-3. Playwright E2E（TC-UI-002~007）
+## 下一步
+1. Playwright E2E（TC-UI-002~007）
+2. M6 打磨（含硬降 T-Spin 口径评审：代码现状 = 原地硬降保留 T-Spin）
 
 ## 待定项 / 风险提醒
-- 硬降保留 T-Spin（`hardDrop` 中仅 d>0 清 `lastActionRotation`）：**代码现状 = 原地硬降保留 T-Spin**，activeContext 旧记录"硬降取消 T-Spin"已过期（本轮核实并在此勘误）；仍建议 M6 手感评审定夺
+- 硬降保留 T-Spin（`hardDrop` 中仅 d>0 清 `lastActionRotation`）：**代码现状 = 原地硬降保留 T-Spin**，仍建议 M6 手感评审定夺
 - 集成测试对 tick 时序敏感：机器高负载时 tick 落后墙钟（onTimer steps>10 钳制为 1），断言用轮询 + `fileParallelism: false`
+- bot 单元测试中 HARD 思考延迟 = 首调建计划 + 4 tick 递减（共 5 次 null 后才出动作）；批量回归用 maxTicks=4000（区分度最佳且 ~6.5s 可接受）
 - Dockerfile 未经实际 build 验证；PowerShell 5.1 写文件必须 `[System.IO.File]::ReadAllText/WriteAllText`（UTF-8 无 BOM）
 - 已推送 GitHub：**github.com/qonies/BearBricks**；后续改动直接 `git commit` + `git push`（PS 5.1 对 git 中文参数用 `-F 消息文件`，消息文件放 TEMP）
-

@@ -192,6 +192,11 @@ interface GameModeStrategy {
 | NORMAL | 150ms | 5% | 最优解但偶发失误 |
 | HARD | 60ms | 0% | 最优解 + 考虑攻击时机（保留 Tetris） |
 - survival 模式 HARD 追加「压制策略」：高度低于均值时优先攻击
+- **M5 实现注记**（`packages/shared/src/ai/bot.ts`，纯 TS 零依赖）：
+  - 评估权重：`cost = 0.510066·聚合高度 + 0.35663·空洞 + 0.184483·凹凸度 + 0.1·累计井深 − 0.760666·消行`（经典调优组合，TC-BOT-001 批量对局回归验证：固定 12 seed × 4000 tick 下 HARD 平均 149 行 / NORMAL 94 / EASY 27，EASY 顶出率 8/12、HARD 0）
+  - 攻击模式（survival/timed）：4 消（Tetris）额外减 `0.8` 代价，替代「高度低于均值时优先攻击」的复杂判定
+  - 执行模型：每权威 tick `decide()` 产出 ≤1 个动作（思考延迟 → 旋转 → 平移 → 硬降），由 Room 走与真人相同的 `game.applyInput`；踢墙/垃圾行堵路卡住 3 tick 兜底硬降，保证永不挂死
+  - 确定性：误操作 RNG 以 `${seed}:bot` 派生（独立于方块 bag 与垃圾行洞列 RNG）
 
 ## 7. 安全设计
 - 输入即权限：未知消息类型或绕过 `game.input` 的伪造状态类消息一律回 E4031 并计数，累计 10 次断开（与 protocol §8、TC-SEC-001 一致）

@@ -9,6 +9,7 @@ export * from './engine/board';
 export * from './engine/garbage';
 export * from './engine/score';
 export * from './engine/game';
+export * from './ai/bot';
 export * from './modes/sprint';
 export * from './modes/survival';
 export * from './modes/timed';

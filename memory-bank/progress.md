@@ -11,7 +11,7 @@
 | M3.5 | 全量代码审查修复（27 项）+ 协议 v1.3 + 聊天 UI | ✅ 完成（2026-10-22） |
 | M4 | timed 限时赛（计时同步/复活/免伤） | ✅ 完成（2026-10-22） |
 | M4.5 | 全量审查修复（P0×2 + P1×9 + 文档同步，协议 v1.5） | ✅ 完成（2026-10-22） |
-| M5 | AI 机器人（3 难度，替换临时 bot） | ⬜ 未开始（聊天 UI 已于 M3.5 落地） |
+| M5 | AI 机器人（3 难度，替换临时 bot） | ✅ 完成（2026-10-23） |
 | M6 | 打磨：设置/音效/可访问性/压测/Docker 部署 | ⬜ 未开始 |
 
 ## 已完成
@@ -47,9 +47,14 @@
   - **P2/P3**：Hold/Next 小窗 HiDPI（`render.hiDpiCanvas`）；Lobby 文案；快照去重 key 补 timed.pendingGarbage/status
   - **文档同步**：protocol.md v1.5、technical-design.md v1.1（目录/校正策略/store 现状）、ADR-0004 措辞、README 协议版本、techContext 用例数、本文件 M5 行勘误（聊天 UI 已落地）
   - **测试**：shared 83（+6）/ client 16（+3）/ server 11（+1，timed 宽限复活循环全流程）全绿；typecheck/lint 通过
+- [x] **M5 AI 机器人（2026-10-23）**：
+  - shared：新增 `ai/bot.ts`（纯 TS 零依赖，index 导出）——`BOT_DIFFICULTY_PARAMS`（EASY 300ms/15%、NORMAL 150ms/5%、HARD 60ms/0%）+ `enumeratePlacements`（旋转×列全枚举硬降模拟）+ `evaluateBoard`（聚合高度/空洞/凹凸度/累计井深）+ `BotController.decide()`（每权威 tick 产出 ≤1 个 GameAction：思考延迟→Hold 权衡 margin 0.3→误操作扰动→旋转→平移→硬降；卡住 3 tick 兜底硬降）+ `simulateBotGame` 无头模拟；误操作 RNG 以 `${seed}:bot` 派生（独立于 bag/garbage RNG，可复现）；攻击模式 4 消额外 −0.8 代价；实测 12 seed×4000 tick：HARD 149 行 / NORMAL 94 / EASY 27（EASY 顶出 8/12、HARD 0）；调参脚本 `scripts/bot-tune.ts`
+  - server：Seat 用 `bot: BotController | null` 替换临时 bot 字段；beginGame 按 difficulty+seed 创建（attackMode = mode ≠ sprint）；botTick = decide → `game.applyInput`（与真人同一输入通道）→ finished 走 markSeatGameEnded
+  - 测试：shared `bot.test.ts` 9 用例（含 TC-BOT-001 批量回归 HARD≫EASY、timed 顶出→respawn→继续对局）+ server `bot.integration.test.ts` 2 用例（TC-BOT-002 移除 AI、TC-BOT-001 同一 GameLoop 路径）；**shared 92 + client 16 + server 13 全绿**；typecheck/lint/build 通过
+  - 文档：README AI 行 ✅、technical-design §6 实现注记、test-plan TC-BOT 实现状态
 
 ## 未开始 / 已知事项
-- 真实 AI（M5，M2 用临时 bot 占位：新块 0.5s 后硬降）；Playwright E2E（TC-UI-002~007）待装浏览器（M4.5 的 P0 缺陷正是 L3 缺失漏网的实例）；带宽/200 房压测（M6）
+- Playwright E2E（TC-UI-002~007）待装浏览器（M4.5 的 P0 缺陷正是 L3 缺失漏网的实例）；带宽/200 房压测（M6）
 - 硬降与 T-Spin 口径：代码现状 = 原地硬降（d=0）保留 T-Spin、位移硬降取消；建议 M6 手感评审定夺（旧记录"硬降一律取消"已勘误）
 
 ## 经验教训 / 注意事项

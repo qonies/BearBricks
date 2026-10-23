@@ -86,6 +86,8 @@
 | TC-BOT-001 | AI 输入经同一 GameLoop 路径；固定 seed 100 局 EASY 胜率显著低于 HARD | P1 | FR-4 |
 | TC-BOT-002 | AI 移除后立即停帧、不占连接 | P1 | FR-4 |
 
+> **M5 实现状态**：TC-BOT-001 已落地为「shared 无头批量对局回归（12 seed，HARD≫EASY + 顶出率对比）+ server 真实 ws 集成（bot 经同一 GameLoop 落子推进）」；TC-BOT-002 覆盖于 server `bot.integration.test.ts`（WAITING 移除 AI 座位立即空出）。100 局胜率全量回归留作调参脚本（`packages/shared/scripts/bot-tune.ts` 可扩）。
+
 ## 6. L3 E2E 用例（Playwright，多 browser context）
 | 编号 | 用例 | 优先级 | 关联 |
 |---|---|---|---|
