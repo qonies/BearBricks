@@ -15,4 +15,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/server/dist ./dist
 COPY --from=build /app/packages/client/dist ./client-dist
 EXPOSE 3000
+# 非 root 运行 + 容器健康检查（NFR-7 部署硬化）
+USER node
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1
 CMD ["node", "dist/index.mjs"]

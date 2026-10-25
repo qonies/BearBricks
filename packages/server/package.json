@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.mjs --external:fastify --external:ws --external:zod",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.mjs --external:fastify --external:ws --external:zod --external:@fastify/compress",
     "start": "node dist/index.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@bearbricks/shared": "*",
+    "@fastify/compress": "^8.3.1",
     "fastify": "^5.0.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"

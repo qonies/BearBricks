@@ -1,14 +1,14 @@
 // 房间管理：房间码生成（6 位去除 0/O/1/I）、创建/加入/快速匹配、IP 限流、TTL 回收、hello/重连
+// 所有限额/窗口走 config（NFR-7 环境变量）；房间生命周期事件写结构化日志（NFR-6）
 
 import type { WebSocket } from 'ws';
+import { sanitizeNickname } from '@bearbricks/shared';
 import { genRoomCode, genToken, Room, type Seat } from './room';
 import { Session } from '../net/session';
 import { config } from '../config';
+import { noopLogger, type Logger } from '../log';
 
-const WINDOW_MS = 10 * 60_000;
-const JOIN_FAIL_LIMIT = 10; // 房间码爆破防护（TC-SEC-004）
 const SWEEP_INTERVAL_MS = 5000;
-const ROOM_TTL_MS = 10 * 60_000;
 
 interface HelloPayload {
   playerId: string;
@@ -23,8 +23,10 @@ export class RoomManager {
   private roomCreates = new Map<string, number[]>();
   private joinFails = new Map<string, number[]>();
   private sweep: NodeJS.Timeout | null = null;
+  private log: Logger;
 
-  constructor() {
+  constructor(log?: Logger) {
+    this.log = log ?? noopLogger;
     this.sweep = setInterval(() => this.sweepTick(), SWEEP_INTERVAL_MS);
   }
 
@@ -39,9 +41,8 @@ export class RoomManager {
   }
 
   roomCount(): number {
-    let count = 0;
-    for (const room of this.rooms.values()) if (room.hasHumans()) count += 1;
-    return count;
+    // 全服房间数（含 bot-only 房间）；NFR-6 指标口径
+    return this.rooms.size;
   }
 
   detach(session: Session): void {
@@ -93,7 +94,7 @@ export class RoomManager {
   private handleHello(session: Session, d: HelloPayload): void {
     if (session.authenticated) return session.sendError('E4031', '重复发送 hello');
     session.playerId = d.playerId;
-    session.nickname = d.nickname;
+    session.nickname = sanitizeNickname(d.nickname) || '玩家';
     session.authenticated = true;
     // 先尝试 resume（允许接管仍在线的旧连接，避免"旧连接未断开 → 恢复失败"竞态）
     let resumed: { room: Room; seatId: number } | null = null;
@@ -133,7 +134,7 @@ export class RoomManager {
       other.room = null;
       other.seatId = -1;
       other.sendError('E4010', '该身份已在其他连接登录');
-      other.close();
+      other.closeAfterFlush();
     }
   }
 
@@ -154,19 +155,24 @@ export class RoomManager {
   private handleCreate(session: Session, d: { visibility: 'public' | 'private' }): void {
     if (session.room) return session.sendError('E4031', '已在房间中，请先离开');
     const now = Date.now();
-    const list = (this.roomCreates.get(session.ip) ?? []).filter((t) => now - t < WINDOW_MS);
+    const list = (this.roomCreates.get(session.ip) ?? []).filter(
+      (t) => now - t < config.roomCreateWindowMs,
+    );
     if (list.length >= config.roomCreateLimit)
-      return session.rateLimitNotice('创建房间过于频繁（3 个/10 分钟）');
+      return session.rateLimitNotice(
+        `创建房间过于频繁（${config.roomCreateLimit} 个/${Math.round(config.roomCreateWindowMs / 60_000)} 分钟）`,
+      );
     list.push(now);
     this.roomCreates.set(session.ip, list);
     let code = genRoomCode();
     while (this.rooms.has(code)) code = genRoomCode();
-    const room = new Room(code, d.visibility);
+    const room = new Room(code, d.visibility, this.log);
     this.rooms.set(code, room);
     if (!room.join(session)) {
       this.rooms.delete(code);
       return session.sendError('E4090', '房间创建失败');
     }
+    this.log.info({ event: 'room.create', room: code, visibility: d.visibility }, 'room event');
   }
 
   private handleJoin(session: Session, d: { roomCode: string }): void {
@@ -179,17 +185,19 @@ export class RoomManager {
 
   private joinFail(session: Session, code: 'E4040' | 'E4090', message: string): void {
     const now = Date.now();
-    const list = (this.joinFails.get(session.ip) ?? []).filter((t) => now - t < WINDOW_MS);
+    const list = (this.joinFails.get(session.ip) ?? []).filter(
+      (t) => now - t < config.roomCreateWindowMs,
+    );
     list.push(now);
     this.joinFails.set(session.ip, list);
-    if (list.length > JOIN_FAIL_LIMIT) return session.rateLimitNotice('尝试过于频繁，请稍后再试');
+    if (list.length > config.joinFailLimit) return session.rateLimitNotice('尝试过于频繁，请稍后再试');
     session.sendError(code, message);
   }
 
   private handleQuickMatch(session: Session): void {
     if (session.room) return session.sendError('E4031', '已在房间中，请先离开');
     for (const room of this.rooms.values()) {
-      if (room.visibility === 'public' && room.phase === 'WAITING' && room.hasEmptySeat()) {
+      if (room.visibility === 'public' && room.phase === 'WAITING' && room.hasJoinableSeat()) {
         if (room.join(session)) return;
       }
     }
@@ -207,7 +215,7 @@ export class RoomManager {
     const now = Date.now();
     for (const room of [...this.rooms.values()]) {
       room.checkGrace(now);
-      if (room.phase !== 'PLAYING' && now - room.lastActivity > ROOM_TTL_MS) {
+      if (room.phase !== 'PLAYING' && now - room.lastActivity > config.roomTtlMs) {
         // 有人在等待的 WAITING 房不回收（protocol §9：回收对象是"WAITING 空房"与 FINISHED 房）
         if (room.phase === 'WAITING' && room.hasHumans()) continue;
         for (const seat of room.seats as Seat[]) {
@@ -218,7 +226,7 @@ export class RoomManager {
             seat.session.seatId = -1;
           }
         }
-        room.destroy();
+        room.destroy('ttl');
         this.rooms.delete(room.code);
       }
     }
@@ -228,12 +236,12 @@ export class RoomManager {
   /** 限流窗口清理：防止以伪造 IP 无限增长键（内存 DoS） */
   private pruneRateLimitMaps(now: number): void {
     for (const [ip, list] of this.roomCreates) {
-      const kept = list.filter((t) => now - t < WINDOW_MS);
+      const kept = list.filter((t) => now - t < config.roomCreateWindowMs);
       if (kept.length === 0) this.roomCreates.delete(ip);
       else this.roomCreates.set(ip, kept);
     }
     for (const [ip, list] of this.joinFails) {
-      const kept = list.filter((t) => now - t < WINDOW_MS);
+      const kept = list.filter((t) => now - t < config.roomCreateWindowMs);
       if (kept.length === 0) this.joinFails.delete(ip);
       else this.joinFails.set(ip, kept);
     }
@@ -245,7 +253,8 @@ export class RoomManager {
 
   shutdown(): void {
     if (this.sweep) clearInterval(this.sweep);
-    for (const room of this.rooms.values()) room.destroy();
+    for (const room of this.rooms.values()) room.destroy('shutdown');
     for (const session of this.sessions) session.shutdown();
+    this.log.info({ event: 'shutdown', rooms: this.rooms.size, sessions: this.sessions.size }, 'room event');
   }
 }

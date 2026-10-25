@@ -7,11 +7,17 @@ import { useRoomStore } from '../store/room';
 import { useSettings } from '../store/settings';
 import type { LocalMode } from '../game/engineRunner';
 
-export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
+export function Lobby({
+  onSingle,
+  onSettings,
+}: {
+  onSingle: (mode: LocalMode) => void;
+  onSettings: () => void;
+}) {
   const [nickname, setNickname] = useState(loadIdentity().nickname);
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [code, setCode] = useState('');
-  const { das, arr, ghost, update } = useSettings();
+  const settings = useSettings();
 
   /** 昵称落库；若发生变化则重建握手，让服务端以新昵称重新 hello（大厅场景不在房间内） */
   const commitNickname = (): void => {
@@ -31,30 +37,30 @@ export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-8 bg-slate-900 text-slate-100">
+    <div className="flex min-h-[100dvh] w-full flex-col items-center gap-5 overflow-y-auto bg-slate-900 px-4 py-6 text-slate-100" style={{ paddingTop: 'max(1.5rem, env(safe-area-inset-top))' }}>
       <div>
-        <h1 className="text-5xl font-black tracking-widest text-emerald-400">BEARBRICKS</h1>
+        <h1 className="text-4xl font-black tracking-widest text-emerald-400 sm:text-5xl">BEARBRICKS</h1>
         <p className="mt-2 text-center text-sm text-slate-400">浏览器多人俄罗斯方块对战</p>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex w-full max-w-[560px] flex-col gap-3 sm:flex-row">
         <button
           onClick={() => onSingle('marathon')}
-          className="w-56 rounded-2xl border border-slate-700 bg-slate-800 p-6 text-left transition hover:border-emerald-500 hover:bg-slate-700"
+          className="w-full rounded-2xl border border-slate-700 bg-slate-800 p-5 text-left transition hover:border-emerald-500 hover:bg-slate-700 sm:w-1/2"
         >
           <div className="text-xl font-bold">马拉松 Marathon</div>
           <div className="mt-1 text-sm text-slate-400">单人 · 无限模式 · 顶出结束</div>
         </button>
         <button
           onClick={() => onSingle('sprint')}
-          className="w-56 rounded-2xl border border-slate-700 bg-slate-800 p-6 text-left transition hover:border-emerald-500 hover:bg-slate-700"
+          className="w-full rounded-2xl border border-slate-700 bg-slate-800 p-5 text-left transition hover:border-emerald-500 hover:bg-slate-700 sm:w-1/2"
         >
           <div className="text-xl font-bold">竞速 Sprint 40</div>
           <div className="mt-1 text-sm text-slate-400">单人 · 最先清除 40 行 · 计时挑战</div>
         </button>
       </div>
 
-      <div className="w-[560px] rounded-2xl border border-slate-700 bg-slate-800/60 p-5">
+      <div className="w-full max-w-[560px] rounded-2xl border border-slate-700 bg-slate-800/60 p-5">
         <div className="mb-3 text-lg font-bold text-emerald-400">多人对战</div>
 
         <label className="mb-3 flex items-center justify-between text-sm">
@@ -62,6 +68,10 @@ export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
           <input
             value={nickname}
             maxLength={12}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="done"
             onChange={(e) => setNickname(e.target.value)}
             onBlur={commitNickname}
             className="w-40 rounded bg-slate-700 px-2 py-1 text-right"
@@ -94,6 +104,10 @@ export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
               value={code}
               maxLength={6}
               placeholder="ABC234"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="go"
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === 'Enter' && join()}
               className="w-28 rounded bg-slate-700 px-2 py-1 text-center font-mono tracking-widest"
@@ -118,48 +132,20 @@ export function Lobby({ onSingle }: { onSingle: (mode: LocalMode) => void }) {
         </div>
       </div>
 
-      <SettingsBlock das={das} arr={arr} ghost={ghost} update={update} />
-    </div>
-  );
-}
-
-function SettingsBlock(props: {
-  das: number;
-  arr: number;
-  ghost: boolean;
-  update: (patch: { das?: number; arr?: number; ghost?: boolean }) => void;
-}) {
-  const { das, arr, ghost, update } = props;
-  return (
-    <div className="w-[560px] rounded-xl border border-slate-700 bg-slate-800/60 p-4 text-sm">
-      <div className="mb-2 font-semibold text-slate-300">设置（localStorage 持久化）</div>
-      <div className="flex gap-8">
-        <label className="flex flex-1 items-center justify-between py-1">
-          <span>DAS (ms)</span>
-          <input
-            type="number"
-            min={50}
-            max={400}
-            value={das}
-            onChange={(e) => update({ das: Math.min(400, Math.max(50, Number(e.target.value) || 133)) })}
-            className="w-20 rounded bg-slate-700 px-2 py-1 text-right font-mono"
-          />
-        </label>
-        <label className="flex flex-1 items-center justify-between py-1">
-          <span>ARR (ms, 0=瞬间)</span>
-          <input
-            type="number"
-            min={0}
-            max={200}
-            value={arr}
-            onChange={(e) => update({ arr: Math.min(200, Math.max(0, Number(e.target.value) || 0)) })}
-            className="w-20 rounded bg-slate-700 px-2 py-1 text-right font-mono"
-          />
-        </label>
-        <label className="flex flex-1 items-center justify-between py-1">
-          <span>显示 Ghost</span>
-          <input type="checkbox" checked={ghost} onChange={(e) => update({ ghost: e.target.checked })} />
-        </label>
+      <div className="flex w-full max-w-[560px] items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-800/60 p-4 text-sm">
+        <div className="min-w-0">
+          <div className="font-semibold text-slate-300">设置</div>
+          <div className="truncate text-xs text-slate-500">
+            键位 · 触控 · 手感 · 音效（DAS {settings.das}ms / ARR {settings.arr}ms / Ghost{' '}
+            {settings.ghost ? '开' : '关'}）
+          </div>
+        </div>
+        <button
+          onClick={onSettings}
+          className="shrink-0 rounded-lg bg-slate-700 px-4 py-2 font-semibold hover:bg-slate-600"
+        >
+          打开设置
+        </button>
       </div>
     </div>
   );

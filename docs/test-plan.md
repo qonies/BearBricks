@@ -2,10 +2,11 @@
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v1.0 |
-| 日期 | 2026-10-22 |
+| 版本 | v1.2 |
+| 日期 | 2026-10-25 |
 | 关联 | `requirements.md`（FR/NFR）、`technical-design.md`、`protocol.md` |
 | 工具链 | Vitest（单元/集成）、Playwright（E2E）、自研 ws 压测脚本 |
+| v1.2 变更 | M6：新增 7-bag 重连对齐 / E4010 投递 / survival rankBottom / AI 半程逐格软降 / IME / 320px 触控 / 重连 WAITING / 顶号遮罩等用例；修正 TC-SEC-004 次数（10） |
 
 ## 1. 目的与范围
 验证 BearBricks 满足 `requirements.md` 中全部 FR/NFR：三模式规则正确、联机稳定公平、聊天安全、性能达标。范围覆盖 shared 引擎、server 房间与网络、client UI 与交互；不含浏览器内核兼容性穷举（按目标浏览器矩阵抽样）。
@@ -85,8 +86,19 @@
 | TC-CHAT-003 | 系统消息 JOIN/LEAVE/TOP_OUT/RESPAWN/VICTORY 触发正确 | P1 | FR-9 |
 | TC-BOT-001 | AI 输入经同一 GameLoop 路径；固定 seed 100 局 EASY 胜率显著低于 HARD | P1 | FR-4 |
 | TC-BOT-002 | AI 移除后立即停帧、不占连接 | P1 | FR-4 |
+| TC-BOT-003 | AI 硬降门槛：每个方块逐格 soft ≥10 行后才 hard；提前落地等待锁定；难度参数 450/300/180ms、0.30/0.18/0.06 | P0 | FR-4 |
+| TC-ROOM-007 | `game.start` 仅下发本人 seed（对手座位键不出现），对手未来队列不可推算 | P0 | 协议 §3 / 技设 §4.3 |
+| TC-MD-C-004 | timed 免伤窗/复活倒计时内双向禁攻：不收攻击，消行也不转发、不抵消自身待收垃圾 | P0 | FR-7 / §4.5 |
+| TC-MD-B-005 | survival 对局中主动离开 = 判淘汰（座位保留垫底、`resumeToken` 作废），且再来一局清理该不可恢复座位 | P0 | FR-10.3 |
+| TC-NET-006 | 被限流丢弃的输入 seq 同样计入已确认（客户端据此裁剪 inputLog，不再永久重放） | P1 | ADR-0002 |
+| TC-NET-007 | 连接层限额可配置：`MAX_CONN_PER_IP`/`MAX_CONNECTIONS`/`GRACE_MS` 等环境变量覆盖生效、非法值回退默认 | P1 | 协议 §9 |
+| TC-NET-008 | 重连/校正后 `spawnCount` 对齐 7-bag：连续 9 块后 queue 与服务端一致 | P0 | 协议 §5 / 技设 §4.3 |
+| TC-NET-009 | 顶号 E4010 先 flush 再断开（旧标签页可见提示）；未 hello 的其它消息回 E4031（不再触发 displaced） | P0 | 协议 §8 |
+| TC-MD-B-006 | survival 4 人局：主动离开者垫底（rankBottom）；已淘汰观战者离开仍保留原名次 | P0 | FR-10.4 |
 
+> **M6 实现状态（2026-10-25）**：shared 98 / client 57 / server 29 全绿；TC-BOT-003、TC-NET-008、TC-MD-B-006、TC-UI-018 已落地为单元/集成用例（`bot.test.ts`、`netGame.test.ts`、`room.rules.test.ts`、`touchLayout.test.ts`）；TC-UI-017/019/020/021 与 iPad project 仍待 Playwright/真机。
 > **M5 实现状态**：TC-BOT-001 已落地为「shared 无头批量对局回归（12 seed，HARD≫EASY + 顶出率对比）+ server 真实 ws 集成（bot 经同一 GameLoop 落子推进）」；TC-BOT-002 覆盖于 server `bot.integration.test.ts`（WAITING 移除 AI 座位立即空出）。100 局胜率全量回归留作调参脚本（`packages/shared/scripts/bot-tune.ts` 可扩）。
+> **审计修复回归（v1.6 / 2026-10-25）**：`packages/server/tests/room.rules.test.ts` 覆盖 TC-ROOM-007、TC-MD-C-004、TC-MD-B-005、TC-NET-006（5 用例，假 Session 直驱 Room，不起端口）；`config.test.ts` 增加限额环境变量覆盖/回退回归（TC-NET-007）。TC-SEC-009 的连接层行为（429/503、背压、错误洪泛断连）需真实握手，列入 M6 专项脚本。
 
 ## 6. L3 E2E 用例（Playwright，多 browser context）
 | 编号 | 用例 | 优先级 | 关联 |
@@ -102,6 +114,18 @@
 | TC-UI-009 | 断线重连：掐断某 context 网络 → 30s 内恢复 → 座位与棋局还原 | P0 | FR-10 |
 | TC-UI-010 | 改键生效并持久化 | P1 | FR-12 |
 | TC-UI-011 | 结算「再来一局」→ 全员回 WAITING，模式设置保留 | P1 | FR-2/11 |
+| TC-UI-012 | iPad 触屏：虚拟按键完成移动/旋转/软降/硬降/Hold，可完整打完一局单人 | P0 | FR-12.3 |
+| TC-UI-013 | 棋盘手势（开关开启）：轻点旋转 / 横滑移动 / 下滑落子 / 上滑 Hold；关闭时无效果 | P1 | FR-12.3 |
+| TC-UI-014 | 触屏操作期间页面不滚动、不缩放、不弹长按菜单（棋盘与按键区域） | P0 | FR-12.3 |
+| TC-UI-015 | 横竖屏 / Split View 切换：布局重排且**棋局不重置**（格子尺寸变化但 runner 不重建） | P0 | FR-11.2 |
+| TC-UI-016 | 联机中 Esc / 齿轮打开设置面板：对局不暂停；关闭后按键恢复正常 | P1 | FR-12.2 |
+| TC-UI-017 | 中文聊天 IME：拼音选词回车不发送；composition 结束后 Enter 正常发送 | P1 | FR-9.4 |
+| TC-UI-018 | 320px Split View：触控两簇不重叠/不被裁切，尺寸约 51px，仍可完整操作 | P0 | NFR-2/5 |
+| TC-UI-019 | FINISHED 掉线 → 房主 rematch → 重连带 WAITING：清旧结算并回房间（不卡对局屏） | P0 | FR-10 |
+| TC-UI-020 | 顶号/身份失效：全屏遮罩提示并停止自动重连，刷新可恢复 | P1 | 协议 §8 |
+| TC-UI-021 | 单人打开设置弹层自动暂停；关闭后恢复（联机不暂停） | P1 | FR-12.2 |
+
+> **iPad project 约定（v1.1）**：Playwright 使用设备描述符（`iPad (gen 7) landscape` / `portrait`，`hasTouch: true`）覆盖 TC-UI-012~016 与 TC-COMPAT-003；WebKit 模拟不等价于真机 iPadOS，仍需按 §10 真机清单手测。
 
 ## 7. 专项测试
 
@@ -111,11 +135,12 @@
 | TC-SEC-001 | 伪造高分/棋盘类消息（绕过 input）→ E4031，权威状态不变 | P0 |
 | TC-SEC-002 | 聊天注入 `<script>` / `<img onerror>` → 纯文本显示，无脚本执行（DOM 断言） | P0 |
 | TC-SEC-003 | 4KB / 200KB 载荷 → 拒绝或断开，服务不崩溃 | P0 |
-| TC-SEC-004 | 房间码爆破 20 次失败 → IP 限流 | P1 |
+| TC-SEC-004 | 房间码爆破 >10 次失败 → IP 限流（`JOIN_FAIL_LIMIT` 默认 10） | P1 |
 | TC-SEC-005 | 非 Origin 的 ws 连接被拒 | P1 |
 | TC-SEC-006 | 伪造 resumeToken → 按新会话处理，不越权恢复他人座位 | P0 |
 | TC-SEC-007 | 脚本级高频输入 1000/s → 丢弃+告警，他人不受影响 | P1 |
 | TC-SEC-008 | 非法信封（JSON `null`/数组）、原型链键（`__proto__`/`toString`）→ E4001/E4031 计数，**进程不退出**（M2.5 回归） | P0 |
+| TC-SEC-009 | 连接层防护：每 IP/全服并发超限握手回 429/503；下行积压超 MAX_SOCKET_BUFFER_BYTES 与错误回包 >MAX_ERRORS_PER_SEC 直接断开（v1.6，待 M6 脚本） | P1 |
 
 ### 7.2 NET 网络异常（Playwright route/CDP 或代理注入）
 | 编号 | 用例 | 优先级 |
@@ -139,8 +164,11 @@
 |---|---|---|
 | TC-COMPAT-001 | Chrome/Edge/Firefox/Safari 最近 2 版核心流程冒烟 | P1 |
 | TC-COMPAT-002 | 1366×768 / 1920×1080 / 4K 布局不错位 | P1 |
+| TC-COMPAT-003 | iPad Safari 横/竖屏全流程冒烟（单人 + 联机）：无横向滚动、按钮全部可达、棋盘完整可见 | P0 |
+| TC-COMPAT-004 | Split View 1/2、1/3 与 Stage Manager 任意窗口尺寸：布局不溢出、格子尺寸自适应、棋局不重置 | P1 |
 | TC-ACC-001 | 色盲模式：方块按形状可区分，颜色不承载唯一语义 | P2 |
 | TC-ACC-002 | 全键盘可完成全部操作，焦点顺序合理 | P2 |
+| TC-ACC-003 | 触控命中区 ≥44pt、按钮有可读标签（aria-label），左右手布局可切换 | P2 |
 
 ## 8. 验收矩阵（FR ↔ 用例追溯）
 | 需求 | 主要用例 |
@@ -148,15 +176,15 @@
 | FR-1 身份/大厅 | TC-UI-001 |
 | FR-2 房间 | TC-ROOM-001~006、TC-UI-004/011、TC-MD-X-001 |
 | FR-3 单人 | TC-UI-002/003 |
-| FR-4 AI | TC-BOT-001/002、TC-ROOM-004 |
+| FR-4 AI | TC-BOT-001/002/003、TC-ROOM-004 |
 | FR-5 核心手感 | TC-ENG-001~008/011/012/013 |
 | FR-6 survival | TC-MD-B-*、TC-UI-006、TC-ENG-009/010 |
 | FR-7 timed | TC-MD-C-*、TC-UI-007、TC-ENG-009/010 |
 | FR-8 sprint | TC-MD-A-*、TC-UI-005 |
 | FR-9 聊天 | TC-CHAT-001~003、TC-UI-008、TC-SEC-002 |
-| FR-10 断线重连 | TC-NET-003/004/101~104、TC-UI-009 |
-| FR-11 界面 | TC-UI-004~007/011、TC-COMPAT-002 |
-| FR-12 设置/输入 | TC-UI-010、TC-ACC-002 |
+| FR-10 断线重连 | TC-NET-003/004/008/009/101~104、TC-UI-009/019 |
+| FR-11 界面 | TC-UI-004~007/011/012~016/018、TC-COMPAT-002 |
+| FR-12 设置/输入 | TC-UI-010/012~017/021、TC-ACC-002/003 |
 
 ## 9. 缺陷管理与退出准则
 - 缺陷等级：**S1** 阻断（崩溃/数据错乱/无法开局）、**S2** 严重（核心规则错误、座位丢失）、**S3** 一般（UI/体验）、**S4** 轻微（文案/样式）
@@ -164,9 +192,10 @@
 - 回归：发版前全量 P0 + 上轮 S2/S3 关联用例
 
 ## 10. 执行纪律
-- CI（GitHub Actions，触发分支 master/main）：lint → typecheck → Vitest（shared/client/server）→ coverage（shared 阈值 90/80/85/90）→ build；Playwright E2E 待 M6 接入后追加
-- 集成测试时间逻辑当前为真实等待（端口随机 + afterAll 关闭）；tick/心跳/宽限期的时间仿真（fake timer）在 M3 随 Room 策略抽象一并补齐
+- CI（GitHub Actions，触发分支 master/main）：lint → typecheck → Vitest（shared 98 / client 57 / server 29）→ coverage（shared 阈值 90/80/85/90）→ build；Playwright E2E 待 M6 接入后追加
+- 集成测试时间逻辑：宽限/回收类用例采用"注入 now"（`room.checkGrace(now)`）+ 真实等待混合；**60Hz tick 与 10 分钟 TTL 的时间仿真仍未实现**（TC-ROOM-006 后半、TC-NET-005 待 M6 补 fake timer）
 - **每轮测试/调试结束后必须退出后台 node/vite/preview 进程，不占用端口**（测试代码 afterAll 强制关闭 + 手工 `Get-NetTCPConnection` 抽查）
 - 压测脚本支持 `--duration` 与优雅退出，结束后输出摘要并清理进程
+- **iPad 真机手测清单（v1.2）**：横/竖屏各一局单人 + 一局联机；Split View 1/2 与 1/3（重点 320px 触控条不重叠）；Stage Manager 拖拽缩放；软键盘弹起（聊天/昵称/房间码，IME 选词回车不误发）；妙控键盘与触屏混用；切后台 <30s 与 >30s（后者会被判淘汰，确认提示文案）；添加到主屏幕（图标/standalone）；连续快速点击不触发输入限流丢动作
 
 

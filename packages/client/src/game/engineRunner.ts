@@ -1,6 +1,6 @@
 // 单人模式本地权威执行器（技术设计 §5.5）：rAF 固定 60Hz 步长 + DAS/ARR 调度
 
-import { DAS_MS, ARR_MS, TetrisGame, type GameAction } from '@bearbricks/shared';
+import { DAS_MS, ARR_MS, TetrisGame, type ActivePiece, type GameAction } from '@bearbricks/shared';
 import { AutoShiftScheduler, type Dir } from './autoshift';
 
 const STEP_MS = 1000 / 60;
@@ -15,6 +15,7 @@ export class EngineRunner {
 
   private acc = 0;
   private lastTs = 0;
+  private lastActiveForLatch: ActivePiece | null = null;
   private rafId = 0;
   private running = false;
 
@@ -42,6 +43,10 @@ export class EngineRunner {
     const loop = (ts: number): void => {
       const dt = Math.max(0, Math.min(ts - this.lastTs, 250));
       this.lastTs = ts;
+      if (this.game.active !== this.lastActiveForLatch) {
+        this.lastActiveForLatch = this.game.active;
+        this.scheduler.resetWallLatch();
+      }
       if (!this.paused) {
         this.scheduler.update(dt);
         this.acc += dt;
@@ -80,5 +85,15 @@ export class EngineRunner {
 
   setSoftDrop(on: boolean): void {
     this.game.setSoftDrop(on);
+  }
+
+  /** GameCommands 接口别名（键盘/触控/手势统一走 setSoft） */
+  setSoft(on: boolean): void {
+    this.setSoftDrop(on);
+  }
+
+  /** 释放所有按住态（失焦/切后台/关闭设置面板） */
+  releaseAll(): void {
+    this.scheduler.releaseAll();
   }
 }

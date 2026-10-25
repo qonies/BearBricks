@@ -34,6 +34,8 @@ export function buildSelfSnapshot(
     canHold: g.canHold,
     score: g.score,
     lines: g.lines,
+    // v1.7：7-bag 游标（客户端重连/校正后对齐方块序列）
+    spawnCount: g.spawnCount,
     level: g.level,
     combo: g.combo,
     b2b: g.b2bActive,

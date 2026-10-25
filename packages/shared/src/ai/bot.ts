@@ -2,7 +2,7 @@
 // 纯 TS、确定性（误操作 RNG 由座位 seed 派生）；AI 不直接改棋盘，
 // 每 tick 经 decide() 产出 ≤1 个 GameAction，由 Room 走与真人相同的 game.applyInput 通道执行。
 
-import { BOARD_WIDTH, TOTAL_HEIGHT } from '../rules/constants';
+import { BOARD_WIDTH, TOTAL_HEIGHT, VISIBLE_HEIGHT } from '../rules/constants';
 import type { Difficulty } from '../protocol/messages';
 import {
   clearLines,
@@ -21,6 +21,8 @@ const BOT_STEP_MS = 1000 / 60;
 const HOLD_MARGIN = 0.3;
 /** 计划推进卡住（踢墙失败/目标被垃圾行堵死）多少 tick 后放弃计划兜底硬降 */
 const STUCK_TICKS_LIMIT = 3;
+/** 硬降门槛：必须从本块出生位置起逐格下降至少一半可见高度（M6 用户要求：AI 不得直接直降抢跑） */
+export const BOT_MIN_HARD_DROP_ROWS = Math.ceil(VISIBLE_HEIGHT / 2);
 
 export interface BotDifficultyParams {
   /** 新块出现后的思考延迟（ms），期间不产生输入 */
@@ -31,9 +33,10 @@ export interface BotDifficultyParams {
 
 /** 难度参数（技术设计 §6） */
 export const BOT_DIFFICULTY_PARAMS: Record<Difficulty, BotDifficultyParams> = {
-  EASY: { thinkDelayMs: 300, mistakeRate: 0.15 },
-  NORMAL: { thinkDelayMs: 150, mistakeRate: 0.05 },
-  HARD: { thinkDelayMs: 60, mistakeRate: 0 },
+  // M6：整体下调强度（思考更久 + 误操作更多）；配合「半程逐格软降」硬降门槛，AI 明显更接近真人
+  EASY: { thinkDelayMs: 450, mistakeRate: 0.3 },
+  NORMAL: { thinkDelayMs: 300, mistakeRate: 0.18 },
+  HARD: { thinkDelayMs: 180, mistakeRate: 0.06 },
 };
 
 /** 启发式权重（经典调优组合，TC-BOT-001 批量对局回归验证） */
@@ -178,6 +181,8 @@ export class BotController {
   private lastX: number | null = null;
   private lastRot: Rotation | null = null;
   private stuckTicks = 0;
+  /** 本块出生位置（active.y），硬降门槛按相对下降行数计算 */
+  private pieceStartY = SPAWN_Y;
 
   constructor(difficulty: Difficulty, opts: BotOptions = {}) {
     this.difficulty = difficulty;
@@ -198,6 +203,7 @@ export class BotController {
       this.lastX = null;
       this.lastRot = null;
       this.stuckTicks = 0;
+      this.pieceStartY = active.y;
       return null;
     }
     if (this.thinkTicks > 0) {
@@ -206,17 +212,37 @@ export class BotController {
     }
     if (this.plan === null) {
       this.plan = this.choosePlan(game);
-      if (this.plan === null) return 'hard'; // 无合法落点：兜底硬降，由引擎判定顶出
+      // 无合法落点：未降够一半仍逐格 soft，降够后才允许 hard（由引擎判定顶出）
+      if (this.plan === null) return this.dropFallback(game, active);
     }
     if (this.plan.kind === 'hold') {
       this.plan = null; // 换块后 active 身份变化，下一 tick 自动重新规划
       return 'hold';
     }
-    if (active.rot !== this.plan.rot) return this.guardStuck(active, 'rotCW');
+    if (active.rot !== this.plan.rot) return this.guardStuck(game, active, 'rotCW');
     if (active.x !== this.plan.x)
-      return this.guardStuck(active, active.x < this.plan.x ? 'moveR' : 'moveL');
-    this.plan = null; // 已就位：硬降锁定
+      return this.guardStuck(game, active, active.x < this.plan.x ? 'moveR' : 'moveL');
+    // 已就位但还没逐格降够一半：继续 soft（一步一格）；若已落地则交给锁定延迟，绝不硬降
+    if (!this.descendedEnough(active)) {
+      return this.canMoveDown(game, active) ? 'soft' : null;
+    }
+    this.plan = null; // 已就位且降够一半：允许硬降锁定
     return 'hard';
+  }
+
+  /** 从本块出生位置起是否已逐格下降至少一半可见高度（硬降门槛） */
+  private descendedEnough(active: ActivePiece): boolean {
+    return active.y - this.pieceStartY >= BOT_MIN_HARD_DROP_ROWS;
+  }
+
+  private canMoveDown(game: TetrisGame, active: ActivePiece): boolean {
+    return !collides(game.board, pieceCells(active.type, active.rot), active.x, active.y + 1);
+  }
+
+  /** 无计划/卡住时的兜底：未降够一半只用 soft，降够才允许 hard；落地则等待锁定 */
+  private dropFallback(game: TetrisGame, active: ActivePiece): GameAction | null {
+    if (this.descendedEnough(active)) return 'hard';
+    return this.canMoveDown(game, active) ? 'soft' : null;
   }
 
   /** 生成计划：当前块候选 + Hold 权衡 + 误操作率扰动 */
@@ -252,13 +278,13 @@ export class BotController {
    * 推进卡住保护：踢墙旋转失败 / 垃圾行插入后目标不可达时，x 与 rot 连续多 tick 不变
    * → 放弃当前计划，兜底硬降（下一块重新规划），保证 bot 永不挂死。
    */
-  private guardStuck(active: ActivePiece, action: GameAction): GameAction {
+  private guardStuck(game: TetrisGame, active: ActivePiece, action: GameAction): GameAction | null {
     if (active.x === this.lastX && active.rot === this.lastRot) {
       this.stuckTicks++;
       if (this.stuckTicks >= STUCK_TICKS_LIMIT) {
         this.plan = null;
         this.stuckTicks = 0;
-        return 'hard';
+        return this.dropFallback(game, active);
       }
     } else {
       this.stuckTicks = 0;

@@ -19,6 +19,7 @@ import {
   collides,
   createBoard,
   dropDistance,
+  findFullRows,
   insertGarbage,
   isBoardEmpty,
   mergePiece,
@@ -53,6 +54,19 @@ export interface LastClear {
   perfectClear: boolean;
 }
 
+/**
+ * 消行视觉数据（客户端"闪烁三次后消失"动画的数据源）：纯视觉，不进 stateHash、
+ * 不进协议快照，也不参与攻击/垃圾行判定——服务端权威时序不受影响。
+ */
+export interface ClearVisual {
+  /** 单调递增的事件 id（客户端据此识别"新的一次消行"） */
+  id: number;
+  /** 被消除的行号（消行前坐标，升序） */
+  rows: number[];
+  /** 消行前的棋盘快照（含待闪烁行），动画期间直接绘制 */
+  board: Board;
+}
+
 export interface GameState {
   board: Board;
   active: ActivePiece | null;
@@ -61,6 +75,8 @@ export interface GameState {
   canHold: boolean;
   score: number;
   lines: number;
+  /** 从队列取块的累计次数（快照/重连时用于对齐 7-bag 游标） */
+  spawnCount: number;
   level: number;
   combo: number;
   b2bActive: boolean;
@@ -93,8 +109,18 @@ export class TetrisGame {
   finishTimeMs: number | null = null;
   topOut = false;
   lastClear: LastClear | null = null;
+  /** 从队列取块的累计次数（v1.7：7-bag 对齐；lock/新块/Hold 取新块时 +1） */
+  spawnCount = 0;
+  /** 消行视觉数据（客户端动画用；服务端只是顺带持有，不参与任何判定） */
+  clearVisual: ClearVisual | null = null;
 
-  private readonly bag: SevenBag;
+  private bag: SevenBag;
+  /** 原始 seed（applySnapshotState 重对齐 7-bag 用） */
+  private readonly seed: string;
+  /** 待结算消行队列：同一 tick 内多次锁定按顺序逐个结算，避免攻击被后一次锁定覆盖 */
+  private clears: LastClear[] = [];
+  /** clearVisual.id 计数器（单调递增，重开/复活/快照校正都不回退） */
+  private clearSeq = 0;
   private gravityAcc = 0;
   private lockTimer = 0;
   private lockResets = 0;
@@ -106,7 +132,8 @@ export class TetrisGame {
     this.mode = config.mode;
     this.targetLines = config.mode === 'sprint' ? (config.targetLines ?? 40) : 0;
     this.board = createBoard();
-    this.bag = new SevenBag(new Rng(config.seed ?? defaultSeed()));
+    this.seed = String(config.seed ?? defaultSeed());
+    this.bag = new SevenBag(new Rng(this.seed));
     this.fillQueue();
     this.spawnActive();
   }
@@ -168,8 +195,18 @@ export class TetrisGame {
     this.softDrop = on;
   }
 
-  /** 取出并清空 lastClear（Room 层每次锁定只结算一次攻击，防止重复计攻） */
+  /**
+   * 取出并清空待结算的消行（Room 层每次锁定只结算一次攻击，防止重复计攻）。
+   * 队列优先：同一 tick 内多次锁定（输入积压 / game.inputBatch / 补帧）的消行按发生顺序
+   * 逐个返回，不会因为后一次"无消行锁定"把前一次的攻击冲掉；队列为空时回退到外部
+   * 手工赋值的 lastClear（测试/工具用途）。
+   */
   takeLastClear(): LastClear | null {
+    const queued = this.clears.shift();
+    if (queued) {
+      this.lastClear = this.clears.length > 0 ? (this.clears[this.clears.length - 1] as LastClear) : null;
+      return queued;
+    }
     const lc = this.lastClear;
     this.lastClear = null;
     return lc;
@@ -209,6 +246,7 @@ export class TetrisGame {
 
   /** 生成下一块；出生位被占 → Block Out（marathon 结束 / sprint 清盘重来） */
   spawnActive(): void {
+    this.spawnCount += 1;
     const type = this.queue.shift() as PieceType;
     this.fillQueue();
     const piece: ActivePiece = { type, x: SPAWN_X[type], y: SPAWN_Y, rot: 0 };
@@ -373,6 +411,13 @@ export class TetrisGame {
     mergePiece(this.board, a.type, cells, a.x, a.y);
     this.active = null;
 
+    // 消行视觉数据先留存（消行前棋盘 + 待消失行号），供客户端三闪动画绘制；
+    // 纯视觉，不进 stateHash / 快照，也不影响攻击与垃圾行时序
+    const fullRows = findFullRows(this.board);
+    if (fullRows.length > 0) {
+      this.clearVisual = { id: ++this.clearSeq, rows: fullRows, board: [...this.board] };
+    }
+
     const cleared = clearLines(this.board);
     if (cleared > 0) this.combo += 1;
     else this.combo = 0;
@@ -400,6 +445,8 @@ export class TetrisGame {
             perfectClear,
           }
         : null;
+    // 消行入队：同一 tick 内可能发生多次锁定，Room 层用循环 takeLastClear 逐个结算攻击
+    if (this.lastClear) this.clears.push(this.lastClear);
 
     // sprint 完赛
     if (this.mode === 'sprint' && this.lines >= this.targetLines) {
@@ -453,6 +500,8 @@ export class TetrisGame {
     this.status = 'running';
     this.finishTimeMs = null;
     this.lastClear = null;
+    this.clearVisual = null;
+    this.clears = [];
     this.active = null;
     this.spawnActive();
   }
@@ -471,11 +520,19 @@ export class TetrisGame {
     b2bActive: boolean;
     elapsedMs: number;
     status?: GameStatus;
+    /** v1.7：快照携带的已取块数（缺省 = 不重对齐，兼容旧客户端/测试） */
+    spawnCount?: number;
     softDrop?: boolean;
   }): void {
     this.board = [...s.board];
     this.active = s.active ? { ...s.active } : null;
     this.queue = [...s.queue];
+    // v1.7：恢复 7-bag 游标（spawnCount + 当前 queue 长度 = 已从 bag 取出的块数）。
+    // 否则重连/校正后客户端从 bag 起点重新取块，Next 预览与实际出块会逐渐偏离服务器。
+    if (s.spawnCount !== undefined) {
+      this.spawnCount = s.spawnCount;
+      this.alignBag();
+    }
     this.hold = s.hold;
     this.canHold = s.canHold;
     this.score = s.score;
@@ -499,6 +556,16 @@ export class TetrisGame {
     this.lowestY = this.active ? this.active.y : SPAWN_Y;
     this.lastActionRotation = false;
     this.lastClear = null;
+    // 快照校正后不再回放旧的消行动画/未结算消行（防止重连、复活后补播或重复计攻）
+    this.clearVisual = null;
+    this.clears = [];
+  }
+
+  /** 以 seed + 已取块数重建 bag 游标（queue 已由服务器给出，bag 对齐到 queue 之后） */
+  private alignBag(): void {
+    this.bag = new SevenBag(new Rng(this.seed));
+    const draws = this.spawnCount + this.queue.length;
+    for (let i = 0; i < draws; i++) this.bag.next();
   }
 
   /** 状态指纹（快照变化检测 / 客户端一致性比较），不含 lastClear/finishTime 等派生信息 */
@@ -514,6 +581,7 @@ export class TetrisGame {
       this.b2bActive ? 1 : 0,
       this.hold ?? '-',
       this.canHold ? 1 : 0,
+      this.spawnCount,
     ].join('|');
   }
 
@@ -533,6 +601,7 @@ export class TetrisGame {
       elapsedMs: this.elapsedMs,
       finishTimeMs: this.finishTimeMs,
       topOut: this.topOut,
+      spawnCount: this.spawnCount,
       lastClear: this.lastClear ? { ...this.lastClear } : null,
     };
   }

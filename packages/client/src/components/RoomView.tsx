@@ -3,11 +3,13 @@ import { useEffect, useState } from 'react';
 import type { Difficulty } from '@bearbricks/shared';
 import { net } from '../net/netClient';
 import { useRoomStore } from '../store/room';
+import { ChatPanel } from './ChatPanel';
 
 export function RoomView({ onExit }: { onExit: () => void }) {
   const room = useRoomStore((s) => s.room);
   const selfSeatId = useRoomStore((s) => s.selfSeatId);
   const countdown = useRoomStore((s) => s.countdown);
+  const setToast = useRoomStore((s) => s.setToast);
   const [botDifficulty, setBotDifficulty] = useState<Difficulty>('EASY');
   // 开局倒计时本地递减（服务端只发一次 seconds，客户端按秒倒数到 0）
   const [countdownLeft, setCountdownLeft] = useState<number | null>(null);
@@ -28,18 +30,36 @@ export function RoomView({ onExit }: { onExit: () => void }) {
   const isHost = room.hostSeat === selfSeatId;
   const occupied = room.seats.filter((s) => s.kind !== 'empty');
   const humans = room.seats.filter((s) => s.kind === 'human');
-  const allHumansReady = humans.every((s) => s.ready);
+  // 与服务端 start 一致：房主默认已准备（即使自定义客户端把 ready 置 false 也不应卡住开始）
+  const allHumansReady = humans.every((s) => s.ready || s.seatId === room.hostSeat);
   const firstEmpty = room.seats.find((s) => s.kind === 'empty');
   const mySeat = room.seats.find((s) => s.seatId === selfSeatId);
   const canStart = room.phase === 'WAITING' && occupied.length >= 2 && allHumansReady;
 
+  /** 房间码复制：局域网 http 属非安全上下文，navigator.clipboard 不可用 → 必须给手动抄写回退 */
+  const copyCode = async (): Promise<void> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(room.roomCode);
+        setToast('房间码已复制');
+        return;
+      }
+    } catch {
+      // 无权限 / 非安全上下文：走下面的提示
+    }
+    setToast('请手动抄写房间码（http 局域网下浏览器不允许自动复制）');
+  };
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-900 text-slate-100">
+    <div
+      className="flex min-h-[100dvh] w-full flex-col items-center gap-5 overflow-y-auto bg-slate-900 px-4 py-6 text-slate-100"
+      style={{ paddingTop: 'max(1.5rem, env(safe-area-inset-top))' }}
+    >
       <div className="text-center">
         <div className="text-sm text-slate-400">房间码（点击复制）</div>
         <button
-          onClick={() => navigator.clipboard?.writeText(room.roomCode)}
-          className="font-mono text-4xl font-black tracking-[0.3em] text-emerald-400 hover:text-emerald-300"
+          onClick={() => void copyCode()}
+          className="select-text font-mono text-4xl font-black tracking-[0.3em] text-emerald-400 hover:text-emerald-300"
         >
           {room.roomCode}
         </button>
@@ -55,13 +75,13 @@ export function RoomView({ onExit }: { onExit: () => void }) {
         </div>
       </div>
 
-      <div className="grid w-[640px] grid-cols-2 gap-3">
+      <div className="grid w-full max-w-[640px] grid-cols-1 gap-3 sm:grid-cols-2">
         {room.seats.map((seat) => (
           <SeatCard key={seat.seatId} seat={seat} selfSeatId={selfSeatId} hostSeat={room.hostSeat} canKick={isHost && room.phase === 'WAITING' && seat.kind !== 'empty' && seat.seatId !== room.hostSeat} />
         ))}
       </div>
       {room.phase === 'WAITING' && (
-        <div className="flex w-[640px] flex-col gap-3">
+        <div className="flex w-full max-w-[640px] flex-col gap-3">
           {isHost && (
             <div className="flex items-center justify-between rounded-xl border border-slate-700 bg-slate-800/60 p-4 text-sm">
               <span className="text-slate-300">对局设置</span>
@@ -158,10 +178,20 @@ export function RoomView({ onExit }: { onExit: () => void }) {
               离开房间
             </button>
           </div>
+          {isHost && room.phase === 'WAITING' && !canStart && (
+            <div className="text-center text-xs text-slate-500">
+              至少需要 2 个座位且所有真人已准备（当前 {occupied.length} 人）
+            </div>
+          )}
         </div>
       )}
 
       {room.phase === 'FINISHED' && <div className="text-sm text-slate-400">对局已结束，等待房主「再来一局」…</div>}
+
+      {/* 房间内聊天（FR-9.1：房间级随时可聊）；默认折叠，不挤占座位区（P2-2） */}
+      <div className="h-[320px] w-full max-w-[640px]">
+        <ChatPanel selfSeatId={selfSeatId} defaultOpen={false} />
+      </div>
 
       {countdownLeft != null && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/70">
@@ -196,7 +226,7 @@ function SeatCard(props: {
           {seat.kind === 'human' && seat.online === false && <span className="ml-2 text-xs text-rose-400">离线</span>}
         </div>
         <div className="text-xs text-slate-500">
-          {seat.kind === 'empty' ? '等待加入' : seat.kind === 'bot' ? '机器人（M5 完整 AI）' : '真人玩家'}
+          {seat.kind === 'empty' ? '等待加入' : seat.kind === 'bot' ? '服务端 AI（BotController）' : '真人玩家'}
         </div>
       </div>
       <div className="flex items-center gap-2">

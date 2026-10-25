@@ -7,6 +7,7 @@ import {
   DAS_MS,
   TetrisGame,
   boardFromString,
+  type ActivePiece,
   type GameAction,
   type GameModeName,
   type GameStatus,
@@ -25,6 +26,8 @@ export class NetGameRunner {
   private seqCounter = 0;
   private inputLog = new Map<number, GameAction>();
   private softOn = false;
+  /** 方块身份追踪：新块生成/校正后解除 ARR=0 撞墙闩锁（P1-1） */
+  private lastActiveForLatch: ActivePiece | null = null;
   private scheduler: AutoShiftScheduler;
   private acc = 0;
   private lastTs = 0;
@@ -103,6 +106,10 @@ export class NetGameRunner {
     const loop = (ts: number): void => {
       const dt = Math.max(0, Math.min(ts - this.lastTs, 250));
       this.lastTs = ts;
+      if (this.game.active !== this.lastActiveForLatch) {
+        this.lastActiveForLatch = this.game.active;
+        this.scheduler.resetWallLatch();
+      }
       if (!this.paused && !this.frozen()) {
         this.scheduler.update(dt);
         this.acc += dt;
@@ -126,11 +133,14 @@ export class NetGameRunner {
   /** 本地应用 + 记录 seq + 上行回调；终局/暂停/复活冻结期间不再产生输入（防 E4031 轰炸） */
   private dispatch(action: GameAction): boolean {
     if (this.paused || this.frozen() || this.game.status !== 'running') return false;
-    const seq = ++this.seqCounter;
     const ok = this.game.applyInput(action);
+    // P1-1：本地失败的动作（撞墙移动/Hold 用尽等）不上行、不占 seq——
+    // 服务端同样会拒绝它；跳过可避免高刷新率下无效消息洪水，分歧由快照校正兜底
+    if (!ok) return false;
+    const seq = ++this.seqCounter;
     this.inputLog.set(seq, action);
     this.onInput?.(seq, action);
-    return ok;
+    return true;
   }
 
   apply(action: GameAction): boolean {
@@ -173,6 +183,7 @@ export class NetGameRunner {
       canHold: snap.canHold,
       score: snap.score,
       lines: snap.lines,
+      spawnCount: snap.spawnCount,
       level: snap.level,
       combo: snap.combo,
       b2bActive: snap.b2b,
@@ -211,6 +222,7 @@ export class NetGameRunner {
         canHold: this.game.canHold,
         score: this.game.score,
         lines: this.game.lines,
+        spawnCount: this.game.spawnCount,
         level: this.game.level,
         combo: this.game.combo,
         b2bActive: this.game.b2bActive,

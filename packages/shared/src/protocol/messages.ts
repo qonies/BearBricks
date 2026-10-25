@@ -1,4 +1,4 @@
-// BearBricks WebSocket 协议（protocol.md v1.4）：Zod schema 双端复用
+// BearBricks WebSocket 协议（protocol.md v1.7）：Zod schema 双端复用
 // 信封：{ t, ts, seq?(上行输入), sseq?(下行序号), d }
 // 坐标约定：board/active 均为数组 top-down（index 0 = 顶部隐藏行），与引擎一致
 
@@ -20,6 +20,11 @@ export const ROOM_CODE_SCHEMA = z
   .string()
   .regex(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/, 'invalid room code');
 export const NICKNAME_SCHEMA = z.string().trim().min(1).max(12);
+
+/** 昵称清洗：控制字符会破坏聊天/日志显示；trim + 12 字符上限（M6 审计） */
+export function sanitizeNickname(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 12);
+}
 export const SEAT_ID_SCHEMA = z.number().int().min(0).max(3);
 export const DIFFICULTY_SCHEMA = z.enum(['EASY', 'NORMAL', 'HARD']);
 export const MODE_SCHEMA = z.enum(['sprint', 'survival', 'timed']);
@@ -72,6 +77,8 @@ export const SELF_SNAPSHOT_SCHEMA = z.object({
   canHold: z.boolean(),
   score: z.number().int(),
   lines: z.number().int(),
+  /** v1.7：该座位已从队列取出的块数（客户端据此对齐 7-bag 游标） */
+  spawnCount: z.number().int().nonnegative(),
   level: z.number().int(),
   combo: z.number().int(),
   b2b: z.boolean(),
@@ -217,7 +224,10 @@ export const GAME_START_S2C_SCHEMA = z.object({
   targetLines: z.number().int(),
   /** timed 限时赛时长（秒，v1.4）；其他模式省略 */
   timeLimit: z.number().int().optional(),
-  /** 各座位方块序列种子（seatId → seed）；对手板本就可见，无窥探增益 */
+  /**
+   * 方块序列种子（seatId → seed）。v1.6：**每座位单独下发，只含接收者本人座位**——
+   * seed 决定整局 7-bag 队列，广播全部座位等于公开对手未来方块（与对手快照省略 queue/hold 同口径）
+   */
   seeds: z.record(z.string()),
   startTs: z.number(),
 });

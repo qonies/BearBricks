@@ -19,7 +19,7 @@ describe('AutoShiftScheduler', () => {
     expect(g.active!.x).toBe(7); // T rot0 最右（cells 最大 x=2）
   });
 
-  it('ARR=0 撞墙闩锁：不再连发输入，新块生成后 2 帧内再次到墙', () => {
+  it('ARR=0 撞墙闩锁：闩锁后不再按帧试探，新方块需显式解锁（P1-1）', () => {
     const g = new TetrisGame({ mode: 'marathon', seed: 'latch' });
     let calls = 0;
     const sched = new AutoShiftScheduler(
@@ -35,15 +35,33 @@ describe('AutoShiftScheduler', () => {
     const atWall = g.active!.x;
     expect(atWall).toBe(7);
     const before = calls;
-    for (let i = 0; i < 10; i++) sched.update(16); // 闩锁期：每帧至多 1 次试探
+    for (let i = 0; i < 100; i++) sched.update(16); // 闩锁期：完全静默
     expect(g.active!.x).toBe(atWall);
-    expect(calls - before).toBeLessThanOrEqual(10); // 有限次，而非每帧 10 连发
+    expect(calls - before).toBe(0);
     g.applyInput('hard'); // 锁定 → 新块
     const newX = g.active!.x;
-    sched.update(16); // 试探成功 → 解锁
+    sched.resetWallLatch(); // 新块解锁（Runner 在 active 身份变化时调用）
     sched.update(16); // 瞬间到墙
     expect(g.active!.x).toBeGreaterThan(newX);
     expect(g.active!.x).toBe(7);
+  });
+
+  it('ARR=0 高刷新率：240Hz 持续 1 秒，apply 调用次数有界（P1-1 回归）', () => {
+    const g = new TetrisGame({ mode: 'marathon', seed: 'hz' });
+    let calls = 0;
+    const sched = new AutoShiftScheduler(
+      (dir) => {
+        calls++;
+        return g.applyInput(dir === 'L' ? 'moveL' : 'moveR');
+      },
+      0,
+      0,
+    );
+    sched.press('L');
+    for (let i = 0; i < 240; i++) sched.update(1000 / 240);
+    // 按下 1 次 + 瞬间到墙批量（≤ BOARD_WIDTH 次）；闩锁后 0 次
+    expect(calls).toBeLessThanOrEqual(1 + 10);
+    expect(g.active!.x).toBe(0); // T rot0 最左（cells 最小 x=0 → 盒 x=0）
   });
 
   it('DAS 延迟后按 ARR 间隔重复', () => {

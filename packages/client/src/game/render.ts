@@ -15,13 +15,24 @@ import {
 } from '@bearbricks/shared';
 import { CELL_COLORS } from '../theme';
 
-/** 底层绘制：棋盘数组 + 当前块（单人/多人共用） */
+/** 消行三闪覆盖层（与 clearFx.ts 的 ClearFxFrame 结构兼容）：有值时绘制动画帧而非实时棋盘 */
+export interface ClearFlashOverlay {
+  /** 消行前的棋盘（含待消失行，clearFx.ts 提供） */
+  board: Board;
+  /** 待闪烁行号（消行前坐标） */
+  rows: number[];
+  /** true = 亮（白色覆盖）；false = 暗（压暗） */
+  flashOn: boolean;
+}
+
+/** 底层绘制：棋盘数组 + 当前块（单人/多人共用）；overlay 存在时绘制消行动画帧（不画新块/Ghost） */
 export function drawBoardState(
   ctx: CanvasRenderingContext2D,
   board: Board,
   active: ActivePieceData | null,
   cell: number,
   showGhost: boolean,
+  overlay?: ClearFlashOverlay,
 ): void {
   const w = BOARD_WIDTH * cell;
   const h = (TOTAL_HEIGHT - HIDDEN_ROWS) * cell;
@@ -48,11 +59,30 @@ export function drawBoardState(
     ctx.globalAlpha = 1;
   };
 
+  // 消行三闪动画期间绘制"消行前"的棋盘快照（行尚未塌下）
+  const src = overlay ? overlay.board : board;
   for (let r = HIDDEN_ROWS; r < TOTAL_HEIGHT; r++) {
     for (let c = 0; c < BOARD_WIDTH; c++) {
-      const v = board[r * BOARD_WIDTH + c];
+      const v = src[r * BOARD_WIDTH + c];
       if (v) drawCell(r, c, CELL_COLORS[v] ?? '#94a3b8');
     }
+  }
+
+  if (overlay) {
+    // 待消失行明暗交替：亮相位白色覆盖、暗相位压暗；动画期间不绘制新块/Ghost（街机惯例）
+    for (const r of overlay.rows) {
+      if (r < HIDDEN_ROWS) continue;
+      for (let c = 0; c < BOARD_WIDTH; c++) {
+        if (!overlay.board[r * BOARD_WIDTH + c]) continue;
+        drawCell(
+          r,
+          c,
+          overlay.flashOn ? '#f8fafc' : '#0f172a',
+          overlay.flashOn ? 0.95 : 0.6,
+        );
+      }
+    }
+    return;
   }
 
   if (active) {
@@ -71,8 +101,14 @@ export function drawBoardState(
   }
 }
 
-export function drawBoard(ctx: CanvasRenderingContext2D, game: TetrisGame, cell: number, showGhost: boolean): void {
-  drawBoardState(ctx, game.board, game.active, cell, showGhost);
+export function drawBoard(
+  ctx: CanvasRenderingContext2D,
+  game: TetrisGame,
+  cell: number,
+  showGhost: boolean,
+  overlay?: ClearFlashOverlay,
+): void {
+  drawBoardState(ctx, game.board, game.active, cell, showGhost, overlay);
 }
 
 /** 对手小板：由协议快照（220 字符 + active）绘制，无 Ghost */
@@ -88,6 +124,36 @@ export function drawOpponentBoard(
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
+}
+
+/** Hold / Next 横向小窗：水平排布（竖屏/分屏下的紧凑栏，与 drawMini 共用绘制规则） */
+export function drawMiniRow(
+  ctx: CanvasRenderingContext2D,
+  types: readonly (PieceType | null)[],
+  cell: number,
+  w: number = ctx.canvas.width,
+  h: number = ctx.canvas.height,
+): void {
+  const slotW = w / Math.max(1, types.length);
+  ctx.clearRect(0, 0, w, h);
+  types.forEach((t, i) => {
+    if (!t) return;
+    const cells = PIECE_CELLS[t][0];
+    const xs = cells.map((c) => c[0]);
+    const ys = cells.map((c) => c[1]);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const pw = (maxX - minX + 1) * cell;
+    const ph = (maxY - minY + 1) * cell;
+    const ox = i * slotW + (slotW - pw) / 2;
+    const oy = (h - ph) / 2;
+    ctx.fillStyle = CELL_COLORS[t];
+    for (const [cx, cy] of cells) {
+      ctx.fillRect(ox + (cx - minX) * cell + 1, oy + (cy - minY) * cell + 1, cell - 2, cell - 2);
+    }
+  });
 }
 
 /** HiDPI 画布：按 devicePixelRatio 设置 backing store 并应用变换，返回逻辑坐标的 2D 上下文 */

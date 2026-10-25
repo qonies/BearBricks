@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOARD_WIDTH,
   BOT_DIFFICULTY_PARAMS,
+  BOT_MIN_HARD_DROP_ROWS,
   BotController,
   Rng,
   TetrisGame,
@@ -47,10 +48,11 @@ function fillStack(g: Game, topRow: number): void {
 }
 
 describe('BotController 难度参数（技术设计 §6）', () => {
-  it('三档难度 = 思考延迟 300/150/60ms，误操作率 0.15/0.05/0', () => {
-    expect(BOT_DIFFICULTY_PARAMS.EASY).toEqual({ thinkDelayMs: 300, mistakeRate: 0.15 });
-    expect(BOT_DIFFICULTY_PARAMS.NORMAL).toEqual({ thinkDelayMs: 150, mistakeRate: 0.05 });
-    expect(BOT_DIFFICULTY_PARAMS.HARD).toEqual({ thinkDelayMs: 60, mistakeRate: 0 });
+  it('三档难度 = 思考延迟 450/300/180ms，误操作率 0.3/0.18/0.06（M6 下调）', () => {
+    expect(BOT_DIFFICULTY_PARAMS.EASY).toEqual({ thinkDelayMs: 450, mistakeRate: 0.3 });
+    expect(BOT_DIFFICULTY_PARAMS.NORMAL).toEqual({ thinkDelayMs: 300, mistakeRate: 0.18 });
+    expect(BOT_DIFFICULTY_PARAMS.HARD).toEqual({ thinkDelayMs: 180, mistakeRate: 0.06 });
+    expect(BOT_MIN_HARD_DROP_ROWS).toBe(10); // 20 行可见区的一半
   });
 });
 
@@ -105,7 +107,8 @@ describe('BotController 对局行为', () => {
     g.active = { type: 'S', x: 3, y: 0, rot: 0 }; // S 块补不了 4 格缺口
     g.hold = 'I';
     const bot = new BotController('HARD', { rng: new Rng('bot-hold:bot') });
-    for (let i = 0; i < 5; i++) expect(bot.decide(g)).toBeNull(); // 首调建计划 + HARD 思考 4 tick
+    // 首调（新块）+ 180ms 思考（约 11 tick）→ 共 12 次 null
+    for (let i = 0; i < 12; i++) expect(bot.decide(g)).toBeNull();
     const action = bot.decide(g);
     expect(action).toBe('hold');
     g.applyInput(action!); // Room 层职责：把 decide 产出的动作送进引擎（同一输入通道）
@@ -117,12 +120,13 @@ describe('BotController 对局行为', () => {
 
   it('timed 复活循环：反复顶出 → respawn 后 bot 继续对局（topOuts 场景验证）', () => {
     const g = new TetrisGame({ mode: 'marathon', seed: 'bot-respawn' });
-    const bot = new BotController('HARD', { rng: new Rng('bot-respawn:bot'), attackMode: true });
+    // 用 EASY（高误操作率）+ 更高的垃圾堆，确保能稳定触发多次顶出（HARD 会清行续命）
+    const bot = new BotController('EASY', { rng: new Rng('bot-respawn:bot'), attackMode: true });
     let topOuts = 0;
     let piecesAfterRespawn = 0;
     let lastPiece = g.active;
     let ticks = 0;
-    fillStack(g, 5);
+    fillStack(g, 3);
     while (topOuts < 3 && ticks < 20_000) {
       if (g.active && g.active !== lastPiece) {
         lastPiece = g.active;
@@ -134,7 +138,7 @@ describe('BotController 对局行为', () => {
       if (g.status === 'finished') {
         topOuts++;
         g.respawn(); // timed 语义（Room.markSeatGameEnded 同款）：清盘复活
-        fillStack(g, 5);
+        fillStack(g, 3);
       }
       ticks++;
     }
@@ -142,9 +146,31 @@ describe('BotController 对局行为', () => {
     expect(piecesAfterRespawn).toBeGreaterThan(0); // 复活后 bot 继续落子
   });
 
-  it('确定性：同 seed + 同难度两次模拟结果完全一致', () => {
-    const a = simulateBotGame({ seed: 'determinism', difficulty: 'HARD' });
-    const b = simulateBotGame({ seed: 'determinism', difficulty: 'HARD' });
+  it('硬降门槛：必须逐格 soft 至少一半可见高度后才允许 hard', () => {
+    const g = new TetrisGame({ mode: 'marathon', seed: 'bot-step' });
+    g.canHold = false; // 避免 Hold 换块重置本块起点，专测单块下降
+    const bot = new BotController('HARD', { rng: new Rng('bot-step:bot') });
+    let softs = 0;
+    let sawHard = false;
+    for (let i = 0; i < 800 && !sawHard; i++) {
+      const action = bot.decide(g);
+      if (action === 'hard') {
+        expect(softs).toBeGreaterThanOrEqual(BOT_MIN_HARD_DROP_ROWS);
+        expect(g.active!.y).toBeGreaterThanOrEqual(1 + BOT_MIN_HARD_DROP_ROWS);
+        sawHard = true;
+        break;
+      }
+      if (action === 'soft') softs += 1;
+      if (action) g.applyInput(action);
+      else g.update(STEP_MS);
+    }
+    expect(sawHard).toBe(true);
+    expect(softs).toBeGreaterThanOrEqual(BOT_MIN_HARD_DROP_ROWS);
+  });
+
+  it('确定性：同 seed + 同难度两次模拟结果完全一致', { timeout: 20_000 }, () => {
+    const a = simulateBotGame({ seed: 'determinism', difficulty: 'HARD', maxTicks: 3000 });
+    const b = simulateBotGame({ seed: 'determinism', difficulty: 'HARD', maxTicks: 3000 });
     expect(a).toEqual(b);
   });
 });

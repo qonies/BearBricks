@@ -5,8 +5,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BOARD_WIDTH,
   SPRINT_TIMEOUT_MS,
+  TOTAL_HEIGHT,
   TetrisGame,
+  clearLines,
   collides,
+  createBoard,
+  findFullRows,
   gravitySecondsPerLine,
   pieceCells,
   type GameMode,
@@ -195,12 +199,14 @@ describe('出生下移与软降计分（M2 前置修复）', () => {
       canHold: a.canHold,
       score: a.score,
       lines: a.lines,
+      spawnCount: a.spawnCount,
       level: a.level,
       combo: a.combo,
       b2bActive: a.b2bActive,
       elapsedMs: a.elapsedMs,
     });
     expect(b.stateHash()).toBe(a.stateHash());
+    expect(b.spawnCount).toBe(a.spawnCount);
   });
 
   it('applySnapshotState 携带 status：running 恢复本地预测的顶出卡死 / finished 落地终局', () => {
@@ -285,5 +291,81 @@ describe('垃圾行溢出（receiveGarbage 顶出判定）', () => {
     expect(g.status).toBe('running');
     expect(g.topOut).toBe(false);
     expect(g.board.slice((22 - 4) * BOARD_WIDTH).every((c, i) => (i % 10 === 0 ? c === null : c === 'G'))).toBe(true);
+  });
+});
+
+// TC-ENG-014：消行视觉数据（客户端"闪烁三次后消失"动画的数据源 clearVisual）
+describe('消行视觉数据（clearVisual / findFullRows）', () => {
+  /** 底部两行只差第 8/9 列 → O 块（x=7 覆盖 8/9 列）补满 → Double，消行后棋盘完全为空 */
+  function makeDouble(g: TetrisGame): void {
+    for (let r = TOTAL_HEIGHT - 2; r < TOTAL_HEIGHT; r++)
+      for (let c = 0; c < BOARD_WIDTH - 2; c++) g.board[r * BOARD_WIDTH + c] = 'G';
+    g.active = { type: 'O', x: 7, y: 3, rot: 0 };
+    g.applyInput('hard');
+  }
+
+  it('findFullRows：满行行号升序，与 clearLines 清除数一致', () => {
+    const board = createBoard();
+    for (const row of [18, 20])
+      for (let c = 0; c < BOARD_WIDTH; c++) board[row * BOARD_WIDTH + c] = 'G';
+    board[21 * BOARD_WIDTH] = 'T'; // 未满行不计入
+    expect(findFullRows(board)).toEqual([18, 20]);
+    board[21 * BOARD_WIDTH] = null;
+    expect(clearLines(board)).toBe(2);
+    expect(board.every((c) => c === null)).toBe(true);
+  });
+
+  it('消行记录消行前的棋盘快照与行号；无消行锁定不追加事件', () => {
+    const g = makeGame('marathon', 'clear-visual');
+    expect(g.clearVisual).toBeNull();
+    makeDouble(g);
+    const v = g.clearVisual;
+    expect(v).not.toBeNull();
+    expect(v!.id).toBe(1);
+    expect(v!.rows).toEqual([TOTAL_HEIGHT - 2, TOTAL_HEIGHT - 1]);
+    // 快照是"消行前"的棋盘：两行已补满（含刚落下的 O）；实时棋盘已塌下为空
+    for (const r of v!.rows) {
+      const row = v!.board.slice(r * BOARD_WIDTH, (r + 1) * BOARD_WIDTH);
+      expect(row.every((c) => c !== null)).toBe(true);
+    }
+    expect(g.lines).toBe(2);
+    expect(g.board.every((c) => c === null)).toBe(true);
+    // 之后一次无消行锁定：不产生新动画事件（id 与快照都不变）
+    g.applyInput('hard');
+    expect(g.lastClear).toBeNull();
+    expect(g.clearVisual!.id).toBe(1);
+    expect(g.clearVisual!.rows).toEqual([TOTAL_HEIGHT - 2, TOTAL_HEIGHT - 1]);
+  });
+
+  it('takeLastClear：同一 tick 多次锁定的消行逐个返回（防漏攻击回归）', () => {
+    const g = makeGame('marathon', 'clear-queue');
+    makeDouble(g);
+    makeDouble(g); // 两次消行各自入队
+    expect(g.takeLastClear()?.lines).toBe(2);
+    g.applyInput('hard'); // 无消行锁定会把 lastClear 置 null，但不得冲掉队列里的消行
+    expect(g.lastClear).toBeNull();
+    expect(g.takeLastClear()?.lines).toBe(2);
+    expect(g.takeLastClear()).toBeNull();
+  });
+
+  it('applySnapshotState 清空 clearVisual 与未结算消行（重连/校正不补播、不重复计攻）', () => {
+    const g = makeGame('marathon', 'clear-visual-reset');
+    makeDouble(g);
+    expect(g.clearVisual).not.toBeNull();
+    g.applySnapshotState({
+      board: g.board,
+      active: g.active,
+      queue: g.queue,
+      hold: g.hold,
+      canHold: g.canHold,
+      score: g.score,
+      lines: g.lines,
+      level: g.level,
+      combo: g.combo,
+      b2bActive: g.b2bActive,
+      elapsedMs: g.elapsedMs,
+    });
+    expect(g.clearVisual).toBeNull();
+    expect(g.takeLastClear()).toBeNull();
   });
 });

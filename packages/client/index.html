@@ -2,7 +2,18 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- iPad/Safari：viewport-fit=cover 让安全区生效；不锁缩放（可访问性），改为输入框字号 ≥16px 防聚焦放大 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <!-- 添加到主屏幕后以独立窗口启动（iPadOS 无可用全屏 API，这是唯一接近全屏的方式） -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="BearBricks" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <title>BearBricks</title>
   </head>
   <body>
@@ -10,3 +21,4 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+

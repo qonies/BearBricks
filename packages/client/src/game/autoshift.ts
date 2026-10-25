@@ -42,6 +42,11 @@ export class AutoShiftScheduler {
     this.held = null;
   }
 
+  /** 新方块生成/校正后调用：解除 ARR=0 撞墙闩锁，恢复瞬间到墙（由 Runner 在 active 身份变化时调用） */
+  resetWallLatch(): void {
+    this.wallLatched = false;
+  }
+
   get heldDirection(): Dir | null {
     return this.held;
   }
@@ -55,8 +60,8 @@ export class AutoShiftScheduler {
     this.dasElapsed = this.das;
     if (this.arr <= 0) {
       if (this.wallLatched) {
-        // 已在墙边：每帧只试探一次——新块出生/换块后第一次成功移动即解锁
-        if (this.apply(this.held)) this.wallLatched = false;
+        // 已在墙边：闩锁后不再按帧试探（P1-1：高刷新率下每帧重试会打爆入站限流），
+        // 等待 resetWallLatch（新方块/校正）或重新按键解锁
         return;
       }
       // 瞬间到墙：最多 BOARD_WIDTH 次有效移动，有限循环

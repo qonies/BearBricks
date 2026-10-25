@@ -1,11 +1,12 @@
 // survival 生存淘汰排名（ADR-0004 / requirements §4.4）
 // 存活者并列第 1；淘汰者按淘汰时刻降序（越晚淘汰名次越高），同刻并列；
-// abandoned（FR-10.3 宽限超时判淘汰）视为最晚淘汰，垫底并列
+// abandoned（主动离开/宽限超时判淘汰；服务端 `rankBottom` 映射到本字段）视为最晚淘汰，垫底并列
 
 export interface SurvivalRankEntry {
   seatId: number;
   /** 淘汰时刻（对局开始起 ms）；null = 游戏结束时仍存活 */
   eliminatedAtMs: number | null;
+  /** 主动离开/宽限超时判淘汰：垫底并列（不阻止迟到 resume 观战） */
   abandoned: boolean;
 }
 

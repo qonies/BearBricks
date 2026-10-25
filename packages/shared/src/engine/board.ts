@@ -33,18 +33,28 @@ export function mergePiece(board: Board, type: PieceType, cells: Cells, ox: numb
   }
 }
 
+function isFullRow(board: Board, row: number): boolean {
+  for (let c = 0; c < BOARD_WIDTH; c++) {
+    if (board[row * BOARD_WIDTH + c] === null) return false;
+  }
+  return true;
+}
+
+/**
+ * 满行行号（top-down 索引升序）。消行只改变行的位置、不改变格子内容，
+ * 因此本函数返回的集合与 clearLines 实际清除的行集合等价（供消行动画取"消行前坐标"）。
+ */
+export function findFullRows(board: Board): number[] {
+  const rows: number[] = [];
+  for (let r = 0; r < TOTAL_HEIGHT; r++) if (isFullRow(board, r)) rows.push(r);
+  return rows;
+}
+
 /** 消行并整体下移，返回消除行数 */
 export function clearLines(board: Board): number {
   let cleared = 0;
   for (let r = TOTAL_HEIGHT - 1; r >= 0; r--) {
-    let full = true;
-    for (let c = 0; c < BOARD_WIDTH; c++) {
-      if (board[r * BOARD_WIDTH + c] === null) {
-        full = false;
-        break;
-      }
-    }
-    if (full) {
+    if (isFullRow(board, r)) {
       board.splice(r * BOARD_WIDTH, BOARD_WIDTH);
       const newRow: Cell[] = new Array<Cell>(BOARD_WIDTH).fill(null);
       board.unshift(...newRow);

@@ -27,7 +27,7 @@ interface GameModeStrategy {
 
 ## 理由
 - 三模式的差异集中在「消行后做什么 / 顶出后做什么 / 何时结束 / 怎么排名」四个问题，正好是策略接口的钩子
-- 客户端 HUD 用 `hudDescriptor()` 数据驱动，避免前端三套硬编码界面
+- 客户端 HUD 由 `mode` 分支渲染（`hudDescriptor()` 未进入最终接口；后续若模式继续增加可再抽象）
 
 ## 备选
 - 在 Room 内 if-else：三处 × 每处 3 分支，随模式增加失控

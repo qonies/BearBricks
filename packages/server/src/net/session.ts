@@ -1,17 +1,17 @@
-// 会话：playerId + resumeToken 绑定、心跳 ping/pong（15s 一次，连续 2 个 ping 无响应 ≈30s 判定断线）、
+// 会话：playerId + resumeToken 绑定、心跳 ping/pong（默认 15s 一次，连续 2 个 ping 无响应 ≈30s 判定断线）、
 // 入站信封解析与 Zod 校验（未知类型 E4031 / 校验失败 E4001，累计 10 次断开）、
-// 每连接入站消息限流（>120 条/s 直接断开，防应用层之外的 CPU DoS）。
+// 每连接入站消息限流（默认 >120 条/s 直接断开，防应用层之外的 CPU DoS）、
+// 下行背压保护（bufferedAmount 超限即断开慢客户端）、错误回包限速（防"非法请求 → 错误回包"放大）。
 // 防御基线：信封必须是普通对象（防 JSON "null"）、t 查表用自有属性（防原型链键）、
 // handleRaw 整体 try/catch——任何单条消息都不得让进程退出。
 
 import type { WebSocket } from 'ws';
 import { validateC2S, type Envelope, type ErrorPayload } from '@bearbricks/shared';
+import { config } from '../config';
 import type { Room } from '../room/room';
 import type { RoomManager } from '../room/roomManager';
 
-const HEARTBEAT_MS = 15_000;
 const MAX_VALIDATION_FAILURES = 10;
-const MAX_MSG_PER_SEC = 120;
 
 export class Session {
   readonly socket: WebSocket;
@@ -79,10 +79,10 @@ export class Session {
       if (this.pingId - this.lastPongId >= 2) {
         this.socket.terminate();
       }
-    }, HEARTBEAT_MS);
+    }, config.heartbeatMs);
   }
 
-  /** 滑动 1s 窗口的入站消息计数；false = 超过 MAX_MSG_PER_SEC，应断开 */
+  /** 固定 1s 窗口的入站消息计数（protocol v1.5 口径）；false = 超过上限，应断开 */
   private allowInbound(): boolean {
     const now = Date.now();
     if (now - this.msgWindowStart >= 1000) {
@@ -90,7 +90,7 @@ export class Session {
       this.msgCount = 0;
     }
     this.msgCount += 1;
-    return this.msgCount <= MAX_MSG_PER_SEC;
+    return this.msgCount <= config.maxMsgPerSec;
   }
 
   private msgWindowStart = 0;
@@ -126,7 +126,8 @@ export class Session {
       return;
     }
     if (!this.authenticated && env.t !== 'hello') {
-      this.sendError('E4010', '请先发送 hello 完成身份握手');
+      // 未 hello 属状态错误（E4031），不能与"顶号"E4010 混用：客户端把 E4010 视为终态
+      this.sendError('E4031', '请先发送 hello 完成身份握手');
       return;
     }
     this.manager.handleMessage(this, env.t, result.data);
@@ -139,14 +140,35 @@ export class Session {
   }
 
   send(t: string, d: unknown): void {
-    if (this.socket.readyState === this.socket.OPEN) {
-      this.socket.send(JSON.stringify({ t, sseq: ++this.sseq, ts: Date.now(), d }));
+    if (this.socket.readyState !== this.socket.OPEN) return;
+    // 背压保护（P2-4）：慢客户端积压超过阈值直接断开，重连后走 welcome + game.state.full 恢复，
+    // 不让单个卡死的浏览器把服务端内存吃满
+    const cap = config.maxSocketBufferBytes;
+    if (cap > 0 && this.socket.bufferedAmount > cap) {
+      this.socket.terminate();
+      return;
     }
+    this.socket.send(JSON.stringify({ t, sseq: ++this.sseq, ts: Date.now(), d }));
   }
 
   sendError(code: ErrorPayload['code'], message: string, reason?: string): void {
+    // 错误回包限速（P2-8）：恶意客户端每帧触发一条错误回包会形成放大，
+    // 超过上限直接断连（正常客户端不会接近该阈值）
+    const now = Date.now();
+    if (now - this.errWindowStart >= 1000) {
+      this.errWindowStart = now;
+      this.errCount = 0;
+    }
+    this.errCount += 1;
+    if (this.errCount > config.maxErrorsPerSec) {
+      this.socket.terminate();
+      return;
+    }
     this.send('error', { code, message, ...(reason ? { reason } : {}) });
   }
+
+  private errWindowStart = 0;
+  private errCount = 0;
 
   rateLimitNotice(message: string): void {
     const now = Date.now();
@@ -158,6 +180,12 @@ export class Session {
 
   close(): void {
     this.socket.terminate();
+  }
+
+  /** 先让错误消息 flush 再断开（E4010 顶号提示不能像 terminate 一样被丢弃） */
+  closeAfterFlush(delayMs = 100): void {
+    this.stopHeartbeat();
+    setTimeout(() => this.socket.terminate(), delayMs).unref();
   }
 
   stopHeartbeat(): void {

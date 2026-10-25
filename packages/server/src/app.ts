@@ -1,7 +1,8 @@
 // Fastify 应用工厂（静态托管 client dist + /healthz），供 index 与集成测试复用
 
 import Fastify, { type FastifyInstance } from 'fastify';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import compress from '@fastify/compress';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WsHub } from './net/wsHub';
@@ -27,12 +28,31 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.map': 'application/json',
   '.woff2': 'font/woff2',
 };
 
 export function createApp(): { app: FastifyInstance; manager: RoomManager; hub: WsHub } {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
-  const manager = new RoomManager();
+  // gzip/deflate（静态 JS/CSS/JSON；阈值 1KB）
+  app.register(compress, { global: true, threshold: 1024 });
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('x-frame-options', 'DENY');
+    reply.header('referrer-policy', 'same-origin');
+    if (config.isProd) {
+      reply.header('content-security-policy', "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+    }
+    return payload;
+  });
+  if (config.isProd && !config.origin) {
+    // 部署护栏（P1-4）：生产环境未配置 ORIGIN 时，非 localhost 来源的 WebSocket 会被拒绝
+    app.log.warn(
+      'NODE_ENV=production 且未设置 ORIGIN：/ws 仅接受 localhost 来源；局域网/域名部署请设置 ORIGIN（例如 http://<host>:3000）',
+    );
+  }
+  const manager = new RoomManager(app.log);
 
   app.get('/healthz', async () => ({
     ok: true,
@@ -56,31 +76,36 @@ export function createApp(): { app: FastifyInstance; manager: RoomManager; hub: 
     let ok = false;
     if (inside) {
       try {
-        ok = existsSync(filePath) && statSync(filePath).isFile();
+        // 异步 stat/read：同步读盘会阻塞事件循环（静态资源与对局 tick 共用同一线程）
+        ok = (await stat(filePath)).isFile();
       } catch {
         ok = false;
       }
     }
     if (ok) {
       const type = MIME[path.extname(filePath)] ?? 'application/octet-stream';
-      // 指纹资源长缓存；index.html 不缓存（保证发版即生效）
-      const header = path.basename(filePath) === 'index.html' ? 'no-cache' : 'public, max-age=31536000, immutable';
-      return reply.type(type).header('cache-control', header).send(readFileSync(filePath));
+      // 只有 Vite 指纹资源（/assets/）可 immutable；manifest/favicon/index.html 必须可刷新
+      const header = url.startsWith('/assets/')
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache';
+      const body = await readFile(filePath);
+      return reply.type(type).header('cache-control', header).send(body);
     }
     // SPA 兜底
     const index = path.join(CLIENT_DIST, 'index.html');
-    if (existsSync(index))
-      return reply
-        .type('text/html; charset=utf-8')
-        .header('cache-control', 'no-cache')
-        .send(readFileSync(index));
-    return reply.code(404).send({ error: 'not found' });
+    try {
+      const body = await readFile(index);
+      return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(body);
+    } catch {
+      return reply.code(404).send({ error: 'not found' });
+    }
   });
 
   const hub = new WsHub(app.server, {
     allowOrigin: (origin) => config.allowOrigin(origin),
     trustProxy: config.trustProxy,
     onConnection: (ws, ip) => manager.createSession(ws, ip),
+    log: app.log,
   });
 
   return { app, manager, hub };

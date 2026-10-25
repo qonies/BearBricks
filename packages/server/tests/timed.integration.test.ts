@@ -244,11 +244,12 @@ describe('M4 timed 限时赛（真实 ws）', () => {
     expect(snap.d.board).toMatch(/^\.+$/); // 棋盘已清空
     expect(snap.d.score).toBe(scoreBefore);
 
-    // 复活倒计时期间输入被静默丢弃（不堆积、不生效）
+    // 复活倒计时期间输入被静默丢弃（不堆积、不生效）；丢弃也会确认 seq（P2-4：
+    // 客户端据此 trim 未确认日志，避免重放已丢弃的输入——复活事件清日志不再是唯一途径）
     a.send('game.input', { seq: 500, action: 'hard' });
     await new Promise((r) => setTimeout(r, 300));
     expect(seatA.pendingInputs).toHaveLength(0);
-    expect(seatA.lastSeq).toBe(0);
+    expect(seatA.lastSeq).toBe(500);
 
     // ===== 免伤窗（§4.5）：复活倒计时结束（轮询等待），B 的攻击不指向 A =====
     await waitUntil(

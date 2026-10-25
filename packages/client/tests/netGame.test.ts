@@ -1,7 +1,7 @@
 // NetGameRunner：确定性镜像 + 快照校正（重放未确认输入）
 
 import { describe, expect, it } from 'vitest';
-import { TetrisGame, buildSelfSnapshot } from '@bearbricks/shared';
+import { TetrisGame, buildSelfSnapshot, type GameAction } from '@bearbricks/shared';
 import { NetGameRunner } from '../src/game/netGame';
 
 describe('NetGameRunner.resync', () => {
@@ -94,5 +94,48 @@ describe('NetGameRunner.resync', () => {
     );
     expect(client.resync(snap)).toBe(false); // hash 一致，仅确认
     expect(client.game.status).toBe('running'); // status 仍被同步恢复
+  });
+
+  it('本地失败的动作不产生 seq、不上行（P1-1 回归）', () => {
+    const client = new NetGameRunner('no-send', 'sprint', 40);
+    const sent: { seq: number; action: GameAction }[] = [];
+    client.onInput = (seq, action) => sent.push({ seq, action });
+    expect(client.apply('hold')).toBe(true);
+    expect(client.apply('hold')).toBe(false); // canHold=false → 本地失败
+    expect(sent).toHaveLength(1);
+    expect(client.apply('hard')).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.seq).toBe(2); // seq 连续无空洞
+  });
+
+  it('timed 复活：先 syncTimed 再 resync，active/queue 与服务器一致（P1-2 回归）', () => {
+    const server = new TetrisGame({ mode: 'marathon', seed: 'respawn-sync' });
+    server.respawn(); // 模拟服务端顶出后已复活的权威状态
+    const at = Date.now() + 3000;
+    const snap = buildSelfSnapshot(server, 3, 0, {
+      timed: { endsAt: at + 100_000, respawnAt: at },
+    });
+    const client = new NetGameRunner('respawn-sync', 'timed', 0);
+    client.syncTimed({ respawnAt: at });
+    client.resync(snap);
+    expect(client.game.active).toEqual(server.active);
+    expect(client.game.queue).toEqual(server.queue);
+    expect(client.game.stateHash()).toBe(server.stateHash());
+  });
+
+  it('重连恢复：spawnCount 对齐 7-bag，连续 9 块后 queue 与服务端一致', () => {
+    const seed = 'bag-align';
+    const server = new TetrisGame({ mode: 'marathon', seed });
+    for (let i = 0; i < 5; i++) server.applyInput('hard');
+    const snap = buildSelfSnapshot(server, 100, 0, { sprint: { target: 40 } });
+    const client = new NetGameRunner(seed, 'survival', 0);
+    expect(client.resync(snap)).toBe(true);
+    expect(client.game.stateHash()).toBe(server.stateHash());
+    for (let i = 0; i < 9; i++) {
+      server.applyInput('hard');
+      client.apply('hard');
+    }
+    expect(client.game.queue).toEqual(server.queue);
+    expect(client.game.active?.type).toBe(server.active?.type);
   });
 });

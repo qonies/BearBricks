@@ -20,7 +20,7 @@ export default tseslint.config(
   },
   {
     // 聊天清洗正则包含控制字符（有意为之）；测试允许 any
-    files: ['packages/server/src/**/*.ts'],
+    files: ['packages/server/src/**/*.ts', 'packages/shared/src/protocol/messages.ts'],
     rules: { 'no-control-regex': 'off' },
   },
   {

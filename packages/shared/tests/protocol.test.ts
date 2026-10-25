@@ -8,6 +8,7 @@ import {
   TetrisGame,
   buildSelfSnapshot,
   computeSprintRanking,
+  sanitizeNickname,
   validateC2S,
 } from '../src';
 
@@ -26,6 +27,13 @@ describe('C→S schema 校验', () => {
     expect(HELLO_SCHEMA.safeParse({ playerId: 'not-uuid', nickname: '玩家' }).success).toBe(false);
     expect(HELLO_SCHEMA.safeParse({ playerId: UUID, nickname: '' }).success).toBe(false);
     expect(HELLO_SCHEMA.safeParse({ playerId: UUID, nickname: 'x'.repeat(13) }).success).toBe(false);
+  });
+
+  it('sanitizeNickname：去控制字符 / trim / 12 字符上限', () => {
+    expect(sanitizeNickname('  Alice  ')).toBe('Alice');
+    expect(sanitizeNickname(`A${String.fromCharCode(0)}B${String.fromCharCode(10)}C`)).toBe('ABC');
+    expect(sanitizeNickname('x'.repeat(20))).toHaveLength(12);
+    expect(sanitizeNickname(String.fromCharCode(1) + String.fromCharCode(2))).toBe('');
   });
 
   it('validateC2S：未知类型与已知类型校验失败区分', () => {
